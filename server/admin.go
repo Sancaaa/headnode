@@ -256,7 +256,7 @@ func (s *Server) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detail.Hosts, err = s.loadHosts(" WHERE a.group_id = ?", id)
+	detail.Hosts, err = s.loadHosts(currentUser(r), " WHERE a.group_id = ?", id)
 	if err != nil {
 		internalError(w, "list group hosts", err)
 		return

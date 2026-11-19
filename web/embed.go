@@ -4,5 +4,9 @@ package web
 
 import "embed"
 
-//go:embed index.html style.css app.js
+// vendor holds third-party files we copy in and pin (xterm.js, D-06). It is
+// embedded as a whole directory, which also means the build fails if the
+// directory is missing: web/vendor/README.md is always there.
+//
+//go:embed index.html style.css app.js vendor
 var Files embed.FS

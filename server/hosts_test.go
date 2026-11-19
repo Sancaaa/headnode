@@ -70,6 +70,12 @@ func TestHostsAPI(t *testing.T) {
 	if detail.Version != "9.9.9" || detail.LastSeenAt == nil {
 		t.Errorf("version=%q last_seen_at=%v, want 9.9.9 and a time", detail.Version, detail.LastSeenAt)
 	}
+	if detail.WANAddr != "127.0.0.1" {
+		t.Errorf("wan_addr = %q, want 127.0.0.1 (where the test client connects from)", detail.WANAddr)
+	}
+	if !detail.CanShell {
+		t.Error("can_shell = false for an admin, want true")
+	}
 
 	// The Hosts page needs the addresses, so the list must carry info too.
 	var list2 []host

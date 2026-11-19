@@ -3,8 +3,8 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -23,6 +23,13 @@ type host struct {
 	Arch     string `json:"arch"`
 	Version  string `json:"version"`
 	Online   bool   `json:"online"`
+	// The address the server saw the agent's control connection come from
+	// (D-29), as of its last connect. "" = never connected. The agent does not
+	// send this: only the server can know how the agent looks from outside.
+	WANAddr string `json:"wan_addr"`
+	// Whether the current user may open a terminal on this host, so the page
+	// can offer a Shell button only to people it will work for.
+	CanShell bool `json:"can_shell"`
 	// nil (JSON null) means the host is in no group: only admins see it.
 	GroupID   *int64  `json:"group_id"`
 	GroupName *string `json:"group_name"`
@@ -38,7 +45,7 @@ type host struct {
 
 const hostQuery = `
 	SELECT a.id, a.name, a.hostname, a.os, a.arch, a.version, a.last_seen_at, a.created_at,
-	       a.info_json, a.group_id, g.name
+	       a.info_json, a.group_id, g.name, a.wan_addr
 	FROM agents a LEFT JOIN groups g ON g.id = a.group_id`
 
 func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +62,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		args = []any{u.ID}
 	}
 
-	hosts, err := s.loadHosts(where, args...)
+	hosts, err := s.loadHosts(u, where, args...)
 	if err != nil {
 		slog.Error("list hosts", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -66,7 +73,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	hosts, err := s.loadHosts(" WHERE a.id = ?", r.PathValue("id"))
+	hosts, err := s.loadHosts(u, " WHERE a.id = ?", r.PathValue("id"))
 	if err != nil {
 		slog.Error("get host", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -127,7 +134,7 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hosts, err := s.loadHosts(" WHERE a.id = ?", r.PathValue("id"))
+	hosts, err := s.loadHosts(currentUser(r), " WHERE a.id = ?", r.PathValue("id"))
 	if err != nil {
 		internalError(w, "load host", err)
 		return
@@ -200,7 +207,7 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 		s.audit(actor, before.ID, "host_move", "group="+groupLabel(before.GroupName)+" -> "+groupLabel(newGroupName))
 	}
 
-	after, err := s.loadHosts(" WHERE a.id = ?", before.ID)
+	after, err := s.loadHosts(currentUser(r), " WHERE a.id = ?", before.ID)
 	if err != nil || len(after) != 1 {
 		internalError(w, "reload host", err)
 		return
@@ -211,7 +218,7 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 // handleDeleteHost removes a host. Its secret stops working at once, because
 // the row the secret is checked against is gone, and a live connection is cut.
 func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
-	hosts, err := s.loadHosts(" WHERE a.id = ?", r.PathValue("id"))
+	hosts, err := s.loadHosts(currentUser(r), " WHERE a.id = ?", r.PathValue("id"))
 	if err != nil {
 		internalError(w, "load host", err)
 		return
@@ -234,10 +241,43 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// loadHosts reads hosts from the database and adds the live state from the
-// in-memory registry. where is a fixed SQL fragment written in this file,
-// never user input; user values always go through args.
-func (s *Server) loadHosts(where string, args ...any) ([]host, error) {
+// roles returns the user's role in each group they belong to (group id ->
+// role). Admins have no rows: they may do everything, so callers check IsAdmin
+// first.
+func (s *Server) roles(u user) (map[int64]string, error) {
+	roles := map[int64]string{}
+	if u.IsAdmin {
+		return roles, nil
+	}
+	rows, err := s.db.Query(`SELECT group_id, role FROM group_members WHERE user_id = ?`, u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("query roles: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var groupID int64
+		var role string
+		if err := rows.Scan(&groupID, &role); err != nil {
+			return nil, fmt.Errorf("scan role: %w", err)
+		}
+		roles[groupID] = role
+	}
+	return roles, rows.Err()
+}
+
+// loadHosts reads hosts from the database, adds the live state from the
+// in-memory registry, and says what the user u may do with each one. where is a
+// fixed SQL fragment written in this file, never user input; user values always
+// go through args.
+func (s *Server) loadHosts(u user, where string, args ...any) ([]host, error) {
+	// One query for all of u's roles, instead of can() once per host. It uses
+	// the same role table as can() (roleAllows), and a test checks that the two
+	// agree (TestHostVisibility).
+	roles, err := s.roles(u)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.Query(hostQuery+where+` ORDER BY a.name COLLATE NOCASE`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
@@ -252,7 +292,7 @@ func (s *Server) loadHosts(where string, args ...any) ([]host, error) {
 		var groupID sql.NullInt64
 		var groupName sql.NullString
 		err := rows.Scan(&h.ID, &h.Name, &h.Hostname, &h.OS, &h.Arch, &h.Version, &lastSeen, &createdAt,
-			&infoJSON, &groupID, &groupName)
+			&infoJSON, &groupID, &groupName, &h.WANAddr)
 		if err != nil {
 			return nil, fmt.Errorf("scan host: %w", err)
 		}
@@ -266,6 +306,8 @@ func (s *Server) loadHosts(where string, args ...any) ([]host, error) {
 			h.GroupID = &groupID.Int64
 			h.GroupName = &groupName.String
 		}
+		// An ungrouped host has no members, so only admins can use a shell on it.
+		h.CanShell = u.IsAdmin || (groupID.Valid && roleAllows(roles[groupID.Int64], actionShell))
 		if infoJSON != "" {
 			var info protocol.Hello
 			if err := json.Unmarshal([]byte(infoJSON), &info); err != nil {

@@ -113,7 +113,7 @@ users          id, username, password_hash, is_admin, created_at
 groups         id, name
 group_members  user_id, group_id, role            -- role: 'operator' | 'viewer'
 agents         id, group_id, name, secret_hash, hostname, os, arch, version,
-               info_json, last_seen_at, created_at
+               info_json, wan_addr, last_seen_at, created_at
 enroll_tokens  token_hash, group_id, expires_at, created_by
 web_sessions   token_hash, user_id, expires_at     -- login cookie
 files          id, name, size, sha256, uploaded_by, created_at
@@ -162,7 +162,8 @@ server/                     one package, split by FILE:
   admin.go                  admin API: users, groups, members
   audit.go                  audit log writer
   agents.go                 online agent registry, control connections
-  relay.go                  session pairing
+  sessions.go               session table, open/attach handlers
+  relay.go                  copies messages between two WebSockets
   files.go                  upload / download / fetch
   db.go, schema.sql         SQLite access
   enroll.go                 enroll tokens, agent enrollment

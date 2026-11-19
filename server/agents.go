@@ -63,6 +63,33 @@ func (r *registry) remove(id string, a *onlineAgent) {
 	}
 }
 
+var errAgentOffline = errors.New("agent is offline")
+
+// send writes one control message to an online agent. Writes on a WebSocket
+// connection are safe from several goroutines, so a request handler can use the
+// connection that handleAgentConnect is reading from.
+func (r *registry) send(id, msgType string, data any) error {
+	r.mu.Lock()
+	a := r.online[id]
+	r.mu.Unlock()
+	if a == nil {
+		return errAgentOffline
+	}
+
+	msg, err := protocol.NewMessage(msgType, data)
+	if err != nil {
+		return err
+	}
+	// If this takes longer than a few seconds the connection is dead. The
+	// library closes it when the deadline passes, and the agent reconnects.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.conn.Write(ctx, websocket.MessageText, msg); err != nil {
+		return fmt.Errorf("send %s to agent: %w", msgType, err)
+	}
+	return nil
+}
+
 // disconnect closes an agent's control connection, if it has one, and forgets
 // it. Used when a host is deleted: the agent must drop off at once instead of
 // staying "online" until it next fails to authenticate.
@@ -172,9 +199,14 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusInternalError, "server error")
 		return
 	}
+	// wan_addr is how the agent looks from outside. The agent cannot know that
+	// (it may be behind NAT), and nothing it says about itself could be trusted
+	// for it, so it is the server's own view of the connection. clientIP is the
+	// same function login uses, so X-Forwarded-For is believed only when the
+	// request really came from our proxy (D-29).
 	_, err = s.db.Exec(
-		`UPDATE agents SET hostname = ?, os = ?, arch = ?, version = ?, info_json = ?, last_seen_at = ? WHERE id = ?`,
-		hello.Hostname, hello.OS, hello.Arch, hello.AgentVersion, string(infoJSON), time.Now().Unix(), agentID,
+		`UPDATE agents SET hostname = ?, os = ?, arch = ?, version = ?, info_json = ?, wan_addr = ?, last_seen_at = ? WHERE id = ?`,
+		hello.Hostname, hello.OS, hello.Arch, hello.AgentVersion, string(infoJSON), clientIP(r), time.Now().Unix(), agentID,
 	)
 	if err != nil {
 		slog.Error("store hello", "agent_id", agentID, "err", err)

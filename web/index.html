@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Hosts · headnode</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
 <link rel="stylesheet" href="/style.css">
+<!-- xterm.js and its fit addon (web/vendor/README.md). Scripts with defer run
+     in this order, so app.js can rely on them. If the files are missing, the
+     requests fail quietly and the Terminal tab says so. -->
+<script src="/vendor/xterm.js" defer></script>
+<script src="/vendor/addon-fit.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <!-- "logged-out" hides the sidebar until app.js knows who is logged in -->

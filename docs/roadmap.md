@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M2**
+**Active milestone: M3**
 
 ---
 
@@ -36,7 +36,7 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 - [x] Groups, members + roles, the `can()` function
 - [x] Enroll tokens from the dashboard (admin)
 - [x] Rename / move group / delete host
-- [ ] Audit log + **Audit** page
+- [x] Audit log + **Audit** page
 - [x] Simple login rate limit
 
 **Done when:** without login, every `/api/*` returns 401. A viewer cannot see hosts outside their groups. Every action above appears in the audit log.
@@ -46,6 +46,8 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 - [ ] Relay: pair browser WS ⇄ agent WS, 15-second timeout
 - [ ] Agent: shell in a PTY, resize
 - [ ] Terminal page with xterm.js (vendored)
+- [x] Hosts row: Shell action
+- [x] WAN address (seen by server)
 
 **Done when:** `htop` and `vim` on the VM work normally from the browser, resizing the window resizes the terminal, and closing the tab kills the shell process on the host.
 

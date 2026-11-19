@@ -100,6 +100,16 @@ func TestAgentConnect(t *testing.T) {
 		t.Errorf("stored hello looks wrong: hostname=%q version=%q info=%q last_seen_at=%d", hostname, version, info, lastSeen)
 	}
 
+	// The WAN address is the server's own view of the connection (D-29). The
+	// test client connects from 127.0.0.1.
+	var wan string
+	if err := s.db.QueryRow(`SELECT wan_addr FROM agents WHERE id = ?`, id).Scan(&wan); err != nil {
+		t.Fatal(err)
+	}
+	if wan != "127.0.0.1" {
+		t.Errorf("wan_addr = %q, want 127.0.0.1", wan)
+	}
+
 	conn.Close(websocket.StatusNormalClosure, "")
 	waitFor(t, "agent to be offline", func() bool { online, _ := s.agents.status(id); return !online })
 }

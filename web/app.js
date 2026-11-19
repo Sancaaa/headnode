@@ -253,13 +253,13 @@ function renderHosts(hosts) {
 
 // The table of hosts, used by the Hosts page and by a group's page.
 function hostsTable(hosts) {
-  return h('table', {},
+  return h('table', { class: 'hosts-table' },
     h('thead', {}, h('tr', {},
       h('th', { class: 'col-host' }, 'Host'),
       h('th', { class: 'col-addr' }, 'Addresses'),
-      h('th', { class: 'col-ver' }, 'Version'),
       h('th', { class: 'col-usage' }, 'Usage'),
-      h('th', {}, 'Status'))),
+      h('th', {}, 'Status'),
+      h('th', { class: 'col-act' }, 'Action'))),
     h('tbody', {}, hosts.map(hostRow)));
 }
 
@@ -274,17 +274,46 @@ function hostRow(host) {
       // Only admins can see a host that is in no group, so this is a hint for them.
       host.group_id == null ? h('div', {}, h('span', { class: 'tag' }, 'No group')) : null),
     h('td', { class: 'col-addr num' },
-      ips.length > 0 ? ips.map((ip) => h('div', {}, ip)) : h('span', { class: 'sub' }, '—')),
-    h('td', { class: 'col-ver num' },
-      host.version || '—',
-      h('div', { class: 'sub' }, info.kernel ? 'Linux ' + info.kernel : '')),
+      // LAN: the host's own addresses (bold, they are what identifies it on its
+      // network). WAN: the address the server saw the agent connect from, which
+      // is how the host looks from outside. Both lines are always shown, with a
+      // dash when the address is not known yet.
+      h('div', { class: ips.length > 0 ? 'lan' : 'sub' }, 'LAN: ' + (ips.length > 0 ? ips.join(', ') : '—')),
+      h('div', { class: 'sub' }, 'WAN: ' + (host.wan_addr || '—'))),
     h('td', { class: 'col-usage num' }, usageSummary(host)),
-    h('td', {}, statusText(host)));
+    h('td', {}, statusText(host)),
+    h('td', { class: 'col-act' }, shellButton(host)));
 
   // The whole row is clickable. The name is a real link too, so the page
   // still works from the keyboard.
   row.addEventListener('click', () => { location.hash = hostLink(host.id); });
   return row;
+}
+
+// Where the terminal for a host lives. The Terminal tab on the host page and the
+// Shell button on the Hosts page both use it, so they always open the same page.
+function terminalHref(hostId) {
+  return hostLink(hostId) + '/terminal';
+}
+
+// The Shell button on a host's row. It only exists when it can work: the host
+// is online and the server says this user may open a shell on it (can_shell,
+// computed from the same role table as the server's check, so the button is
+// never offered to someone the server would refuse).
+function shellButton(host) {
+  if (!host.online || !host.can_shell) return null;
+  // A real link styled as a button, so it works from the keyboard and opens in
+  // a new tab with a middle click, like the other links.
+  // ">_" is a shell prompt, drawn as plain text in the monospace font, so there
+  // is no icon file and nothing to load. It is decoration: screen readers just
+  // read "Shell".
+  const link = h('a', { class: 'btn btn-small', href: terminalHref(host.id) },
+    h('span', { class: 'prompt', 'aria-hidden': 'true' }, '>_'),
+    'Shell');
+  // The whole row opens the host page when clicked. Do not let this click also
+  // reach the row, or the row would send the browser to the host page instead.
+  link.addEventListener('click', (event) => event.stopPropagation());
+  return link;
 }
 
 // "CPU 3% / RAM 7% / Disk 5%", with a warning color per value. Offline hosts
@@ -387,6 +416,7 @@ function renderHost(host) {
     h('a', { class: 'back', href: '#/' }, '← Hosts'),
     pageHead(host.name, null, actions),
     h('div', { class: 'status' }, statusText(host)),
+    hostTabs(host, 'overview'),
   ];
 
   if (host.online && host.heartbeat) {
@@ -477,6 +507,143 @@ function deleteHostDialog(host) {
       return result;
     },
   });
+}
+
+// ------------------------------------------------------------ Terminal page
+
+// Unlike the other pages, the terminal is not redrawn every 2 seconds: that
+// would destroy it. Its route is "static" (see refresh), and leaving the page
+// disposes of it here.
+let terminalSession = null; // { dispose() } of the terminal on screen
+
+function disposeTerminal() {
+  if (terminalSession) {
+    terminalSession.dispose();
+    terminalSession = null;
+  }
+}
+
+// Overview | Terminal, on both pages of a host (design.md §6).
+function hostTabs(host, active) {
+  return h('nav', { class: 'tabs' },
+    h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
+    h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'));
+}
+
+function renderTerminalPage(host) {
+  document.title = host.name + ' · headnode';
+  const page = [
+    h('a', { class: 'back', href: '#/' }, '← Hosts'),
+    pageHead(host.name, null),
+    h('div', { class: 'status' }, statusText(host)),
+    hostTabs(host, 'terminal'),
+  ];
+  if (!host.online) {
+    page.push(h('div', { class: 'notice' },
+      'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
+    return page;
+  }
+
+  const box = h('div', { class: 'terminal' });
+  const status = h('span', { class: 'sub' });
+  const reconnect = h('button', { class: 'btn', type: 'button', hidden: '' }, 'Reconnect');
+  page.push(box, h('div', { class: 'terminal-bar' }, status, reconnect));
+
+  // xterm measures its box to decide how many columns fit, so the box has to be
+  // on the page first. This runs right after refresh() has inserted the nodes.
+  queueMicrotask(() => mountTerminal(host, box, status, reconnect));
+  return page;
+}
+
+// Text from the server that will be written into the terminal: control
+// characters are removed, so it cannot carry escape sequences that move the
+// cursor or redraw the screen (a close reason comes from the agent).
+function plain(text) {
+  return String(text || '').replace(/[\u0000-\u001f\u007f]/g, '');
+}
+
+function mountTerminal(host, box, status, reconnect) {
+  if (!window.Terminal || !window.FitAddon) {
+    box.replaceChildren(h('div', { class: 'notice' },
+      'The terminal library is missing. Download xterm.js into web/vendor (see web/vendor/README.md) and restart the server.'));
+    return;
+  }
+
+  const style = getComputedStyle(document.documentElement);
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: style.getPropertyValue('--mono'),
+    scrollback: 5000,
+    theme: { background: style.getPropertyValue('--terminal-bg').trim() },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(box);
+  fit.fit();
+
+  const encoder = new TextEncoder();
+  let ws = null;
+  let disposed = false;
+  const live = () => ws !== null && ws.readyState === WebSocket.OPEN;
+
+  // Keystrokes go to the host as binary frames, resizes as a text frame
+  // (protocol.md §4).
+  term.onData((data) => { if (live()) ws.send(encoder.encode(data)); });
+  // Some input is raw bytes, not text, for example mouse reports in vim.
+  term.onBinary((data) => { if (live()) ws.send(Uint8Array.from(data, (c) => c.charCodeAt(0))); });
+  term.onResize(({ cols, rows }) => { if (live()) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
+  // Fit the terminal to its box whenever the box changes size (the window was resized).
+  const observer = new ResizeObserver(() => fit.fit());
+  observer.observe(box);
+
+  async function connect() {
+    reconnect.hidden = true;
+    status.textContent = 'Connecting…';
+    const result = await api('POST', '/api/hosts/' + host.id + '/sessions',
+      { kind: 'shell', params: { cols: term.cols, rows: term.rows } });
+    if (disposed) return;
+    if (!result.ok) {
+      term.write('\r\n' + plain(errorText(result)) + '\r\n');
+      status.textContent = 'Not connected';
+      reconnect.hidden = false;
+      return;
+    }
+
+    const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    ws = new WebSocket(scheme + location.host + '/ui/sessions/' + result.data.id);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      status.textContent = 'Connected';
+      term.focus();
+    };
+    ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
+    };
+    ws.onclose = (event) => {
+      if (disposed) return;
+      const why = plain(event.reason);
+      term.write('\r\n[session closed' + (why ? ': ' + why : '') + ']\r\n');
+      status.textContent = 'Not connected';
+      reconnect.hidden = false;
+    };
+  }
+  reconnect.addEventListener('click', () => {
+    term.clear();
+    connect();
+  });
+
+  terminalSession = {
+    dispose() {
+      disposed = true;
+      observer.disconnect();
+      // Closing the WebSocket is what ends the shell on the host: the server's
+      // relay passes the close on and the agent kills the shell.
+      if (ws) ws.close(1000);
+      term.dispose();
+    },
+  };
+  connect();
 }
 
 // ------------------------------------------------------------- Users page
@@ -664,6 +831,8 @@ const AUDIT_LABELS = {
   host_rename: 'Host renamed',
   host_move: 'Host moved',
   host_delete: 'Host deleted',
+  session_open: 'Terminal opened',
+  session_close: 'Terminal closed',
 };
 
 const AUDIT_PAGE_SIZE = 200; // the most the server returns in one reply
@@ -827,6 +996,8 @@ let lastKey = null;  // what is on screen now, so an unchanged reply does not re
 // the host or group once they have it.
 const routes = [
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)$/, url: (m) => '/api/hosts/' + m[1], render: renderHost, nav: '#/', title: 'Host' },
+  // static: drawn once per visit, never by the 2-second poll (see refresh).
+  { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/terminal$/, url: (m) => '/api/hosts/' + m[1], render: renderTerminalPage, nav: '#/', title: 'Terminal', static: true },
   { pattern: /^#\/users$/, url: () => '/api/users', render: renderUsers, nav: '#/users', title: 'Users' },
   { pattern: /^#\/groups\/(\d+)$/, url: (m) => '/api/groups/' + m[1], render: renderGroup, nav: '#/groups', title: 'Group' },
   { pattern: /^#\/groups$/, url: () => '/api/groups', render: renderGroups, nav: '#/groups', title: 'Groups' },
@@ -836,7 +1007,7 @@ const routes = [
 function currentRoute() {
   for (const route of routes) {
     const match = location.hash.match(route.pattern);
-    if (match) return { url: route.url(match), render: route.render, nav: route.nav, title: route.title };
+    if (match) return { url: route.url(match), render: route.render, nav: route.nav, title: route.title, static: route.static };
   }
   return { url: '/api/hosts', render: renderHosts, nav: '#/', title: 'Hosts' };
 }
@@ -850,8 +1021,16 @@ async function refresh() {
   const route = currentRoute();
   const myRoute = routeId;
 
-  let nodes;
+  // A static page (the terminal) is built once per visit. Do not even ask the
+  // server again: a failed poll during a server restart would otherwise
+  // replace the page, and the terminal with it.
+  if (route.static && lastKey === 'static:' + location.hash) return;
+
+  // What to show is decided in two steps. The key says whether it differs from
+  // what is on screen. build() makes the nodes, and only runs when the key
+  // changed, because for the terminal page building means starting a terminal.
   let key;
+  let build;
   try {
     const resp = await fetch(route.url);
     if (resp.status === 401) {
@@ -859,7 +1038,7 @@ async function refresh() {
       // changes, so the 2-second poll leaves it alone and does not wipe what
       // is being typed.
       key = 'login';
-      nodes = renderLogin();
+      build = renderLogin;
       me = null;
     } else {
       // Ask who we are before drawing: the pages differ for administrators.
@@ -867,24 +1046,26 @@ async function refresh() {
 
       if (resp.status === 403) {
         key = 'forbidden';
-        nodes = messagePage('#/', '← Hosts', 'You do not have access to this page.');
+        build = () => messagePage('#/', '← Hosts', 'You do not have access to this page.');
       } else if (resp.status === 404) {
         key = 'not-found';
-        nodes = messagePage('#/', '← Hosts', 'Not found.');
+        build = () => messagePage('#/', '← Hosts', 'Not found.');
       } else if (!resp.ok) {
         throw new Error('HTTP ' + resp.status);
       } else {
         const text = await resp.text();
         // The minute is part of the key because "3 minutes ago" changes without
         // the data changing.
-        key = text + '@' + Math.floor(Date.now() / 60000);
-        document.title = route.title + ' · headnode';
-        nodes = route.render(JSON.parse(text));
+        key = route.static ? 'static:' + location.hash : text + '@' + Math.floor(Date.now() / 60000);
+        build = () => {
+          document.title = route.title + ' · headnode';
+          return route.render(JSON.parse(text));
+        };
       }
     }
   } catch (err) {
     key = 'error:' + err.message;
-    nodes = [h('div', { class: 'notice' }, 'Cannot reach the server (' + err.message + '). Retrying…')];
+    build = () => [h('div', { class: 'notice' }, 'Cannot reach the server (' + err.message + '). Retrying…')];
   }
 
   if (myRoute !== routeId) return;
@@ -894,7 +1075,8 @@ async function refresh() {
   lastKey = key;
   // Redrawing only when something changed also keeps text you selected (to copy
   // an agent id, say) from disappearing every 2 seconds.
-  view.replaceChildren(...nodes);
+  disposeTerminal(); // a page that is replaced takes its terminal with it
+  view.replaceChildren(...build());
 }
 
 window.addEventListener('hashchange', () => {

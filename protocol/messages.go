@@ -30,7 +30,57 @@ type EnrollResponse struct {
 const (
 	TypeHello     = "hello"
 	TypeHeartbeat = "heartbeat"
+	TypeOpen      = "open" // server -> agent: please open a session
 )
+
+// KindShell is the only session kind so far (docs/protocol.md §4).
+const KindShell = "shell"
+
+// Open asks the agent to open a session: the agent then dials
+// /agent/sessions/{SessionID}. What Params holds depends on Kind, so it stays
+// raw until the agent knows the kind (a ShellParams for a shell).
+type Open struct {
+	SessionID string          `json:"session_id"`
+	Kind      string          `json:"kind"`
+	Params    json.RawMessage `json:"params"`
+}
+
+// ShellParams are the parameters of a shell session.
+type ShellParams struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
+}
+
+// TypeResize is the text frame the browser sends when the terminal changes
+// size. The server relays it without looking at it, the agent acts on it.
+const TypeResize = "resize"
+
+type Resize struct {
+	Type string `json:"type"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
+}
+
+const (
+	defaultCols     = 80
+	defaultRows     = 24
+	maxTerminalSize = 500 // no real terminal is bigger, and it stops silly values
+)
+
+// ClampSize makes a terminal size usable: a missing or non-positive value
+// becomes the classic 80x24, and a huge one is capped. The server uses it on
+// what the browser sends, and the agent uses it again on what the server
+// sends, because the agent should not trust anyone's numbers.
+func ClampSize(cols, rows int) (int, int) {
+	return clampDimension(cols, defaultCols), clampDimension(rows, defaultRows)
+}
+
+func clampDimension(n, fallback int) int {
+	if n <= 0 {
+		return fallback
+	}
+	return min(n, maxTerminalSize)
+}
 
 // Envelope wraps every control message: {"type": "...", "data": {...}}.
 // Data stays raw until the type is known, so no reflection is needed:

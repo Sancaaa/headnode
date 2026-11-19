@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -57,7 +57,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err == nil {
 			slog.Info("connected", "agent_id", cfg.AgentID)
 			connectedAt := time.Now()
-			err = heartbeatLoop(ctx, conn)
+			err = heartbeatLoop(ctx, cfg, conn)
 			upFor = time.Since(connectedAt)
 		}
 		if ctx.Err() != nil {
@@ -101,6 +101,19 @@ func backoffDelay(attempt int) time.Duration {
 	return delay + time.Duration(rand.Int64N(int64(delay/2)))
 }
 
+// wsURL turns the server address from agent.json plus a path into a WebSocket
+// URL. The WebSocket library wants ws:// or wss://. Trimming "http" turns
+// http://x into ws://x and https://x into wss://x.
+func wsURL(server, path string) string {
+	return "ws" + strings.TrimPrefix(server, "http") + path
+}
+
+// authHeader is how the agent proves who it is on every request after enrolling
+// (protocol.md §1): "Authorization: Bearer <agent_id>.<agent_secret>".
+func authHeader(cfg Config) http.Header {
+	return http.Header{"Authorization": {"Bearer " + cfg.AgentID + "." + cfg.AgentSecret}}
+}
+
 // connect dials the server and sends hello. On success the caller owns the
 // open connection and must close it.
 func connect(ctx context.Context, cfg Config) (*websocket.Conn, error) {
@@ -109,17 +122,13 @@ func connect(ctx context.Context, cfg Config) (*websocket.Conn, error) {
 		return nil, fmt.Errorf("read host info: %w", err)
 	}
 
-	// The WebSocket library wants ws:// or wss://. Trimming "http" turns
-	// http://x into ws://x and https://x into wss://x.
-	url := "ws" + strings.TrimPrefix(cfg.Server, "http") + "/agent/connect"
+	url := wsURL(cfg.Server, "/agent/connect")
 
 	// This deadline only covers dialing and the handshake, not the connection
 	// that comes out of it.
 	dialCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": {"Bearer " + cfg.AgentID + "." + cfg.AgentSecret}},
-	})
+	conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{HTTPHeader: authHeader(cfg)})
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", url, err)
 	}
@@ -131,17 +140,26 @@ func connect(ctx context.Context, cfg Config) (*websocket.Conn, error) {
 	return conn, nil
 }
 
-// heartbeatLoop sends a heartbeat every 20 seconds until the connection ends,
-// then closes it.
-func heartbeatLoop(ctx context.Context, conn *websocket.Conn) error {
+// heartbeatLoop sends a heartbeat every 20 seconds and listens for the server's
+// commands, until the connection ends. Then it closes the connection.
+//
+// ctx is the agent's own lifetime. Sessions use it rather than the
+// connection's context: a shell has its own WebSocket, so it should not die
+// just because the control connection dropped for a moment.
+func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error {
 	defer conn.CloseNow()
 
 	// A WebSocket connection must be read, or the library never sees the
-	// server's close frame. Nothing the server says matters yet, so CloseRead
-	// reads and discards it. It also cancels the returned context when the
-	// connection closes, which is how we notice a dropped connection. M3 will
-	// replace this with a real read loop (the server's `open` messages).
-	connCtx := conn.CloseRead(ctx)
+	// server's close frame, and the server's commands arrive on it. The reader
+	// runs on its own goroutine and cancels connCtx when the connection ends,
+	// which is how this loop notices a dropped connection.
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	readFailed := make(chan error, 1)
+	go func() {
+		readFailed <- readCommands(connCtx, ctx, cfg, conn)
+		cancel()
+	}()
 
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
@@ -163,8 +181,37 @@ func heartbeatLoop(ctx context.Context, conn *websocket.Conn) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return errors.New("server closed the connection")
+			return fmt.Errorf("server closed the connection: %w", <-readFailed)
 		case <-ticker.C:
+		}
+	}
+}
+
+// readCommands handles what the server sends on the control connection. So far
+// that is only `open`: start a session. It returns when the connection ends.
+func readCommands(connCtx, agentCtx context.Context, cfg Config, conn *websocket.Conn) error {
+	for {
+		_, data, err := conn.Read(connCtx)
+		if err != nil {
+			return err
+		}
+		var env protocol.Envelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			slog.Warn("bad message from the server", "err", err)
+			continue
+		}
+		switch env.Type {
+		case protocol.TypeOpen:
+			var open protocol.Open
+			if err := json.Unmarshal(env.Data, &open); err != nil {
+				slog.Warn("bad open message", "err", err)
+				continue
+			}
+			// Each session runs on its own goroutine with its own WebSocket,
+			// so a slow or stuck shell never holds up the control connection.
+			go runSession(agentCtx, cfg, open)
+		default:
+			slog.Warn("unknown message from the server", "type", env.Type)
 		}
 	}
 }

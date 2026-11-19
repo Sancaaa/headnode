@@ -2,10 +2,11 @@
 -- milestones reach them. CREATE TABLE IF NOT EXISTS makes this file safe to
 -- run on every start (D-05).
 --
--- NOTE: IF NOT EXISTS never changes a table that already exists. If a column
--- is added to an existing table while there is no versioned migration yet,
--- delete data/headnode.db (and its -wal and -shm files) during development
--- (see D-16 and D-24).
+-- NOTE: this file is the BASELINE: the database as it was before migrations
+-- existed. IF NOT EXISTS never changes a table that already exists, so every
+-- later change to a table lives in migrations.go. OpenDB applies those, in
+-- order, to new and old databases alike (D-30). To add a column, do not edit
+-- the tables below: add a migration.
 
 -- Times are unix seconds (INTEGER): no timezone parsing, easy to compare.
 

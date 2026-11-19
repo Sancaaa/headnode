@@ -19,11 +19,17 @@ import (
 type Server struct {
 	db         *sql.DB
 	agents     *registry     // which agents are online right now
+	sessions   *sessionTable // shells waiting for their two sides, or running
 	loginLimit *loginLimiter // slows down password guessing
 }
 
 func New(db *sql.DB) *Server {
-	return &Server{db: db, agents: newRegistry(), loginLimit: newLoginLimiter()}
+	return &Server{
+		db:         db,
+		agents:     newRegistry(),
+		sessions:   newSessionTable(sessionPairTimeout),
+		loginLimit: newLoginLimiter(),
+	}
 }
 
 // Handler returns the router. Go 1.22+ patterns like "POST /agent/enroll"
@@ -49,6 +55,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/groups/{id}/members/{user_id}", s.adminOnly(s.handleRemoveMember))
 	api.HandleFunc("POST /api/enroll-tokens", s.adminOnly(s.handleCreateEnrollToken))
 	api.HandleFunc("GET /api/audit", s.adminOnly(s.handleListAudit))
+	// Not admin-only: any user with the operator role may open a terminal.
+	// handleOpenSession checks that with can().
+	api.HandleFunc("POST /api/hosts/{id}/sessions", s.handleOpenSession)
 	api.HandleFunc("PATCH /api/hosts/{id}", s.adminOnly(s.handlePatchHost))
 	api.HandleFunc("DELETE /api/hosts/{id}", s.adminOnly(s.handleDeleteHost))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +71,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /", uiHandler())
 	mux.HandleFunc("POST /agent/enroll", s.handleEnroll)
 	mux.HandleFunc("GET /agent/connect", s.handleAgentConnect)
+	mux.HandleFunc("GET /agent/sessions/{id}", s.handleAgentSession)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
+	// The browser's WebSocket for a session. It is not under /api/, so it gets
+	// the login wrapper by hand. handleUISession adds the Origin check.
+	mux.Handle("GET /ui/sessions/{id}", s.requireLogin(http.HandlerFunc(s.handleUISession)))
 
 	// Everything else under /api/. One line per method, because a pattern
 	// without a method would conflict with "GET /" above. "POST /api/login"
@@ -82,7 +95,12 @@ func uiHandler() http.Handler {
 		// our own origin. If a bug ever lets agent-supplied text become markup,
 		// the browser still refuses to run it. frame-ancestors stops other
 		// sites from embedding the dashboard in a frame (clickjacking).
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		//
+		// style-src also allows inline styles, for xterm.js (D-28): it creates
+		// <style> elements at run time to size and color the terminal. Scripts
+		// stay locked to our own files.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
 	})

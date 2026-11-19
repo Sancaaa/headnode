@@ -4,7 +4,7 @@ Target style: **a quiet, warm-gray admin console**, modeled on the layout of the
 
 This is **layout and tone inspiration only**. We don't use Tailscale's logo, name, icons or illustrations. The colors below are our own tokens.
 
-A visual example is in [mockup/hosts.html](mockup/hosts.html). Open it directly in a browser. It follows your OS light/dark setting.
+A visual example is in [mockup/hosts.html](mockup/hosts.html). Open it directly in a browser. It follows your OS light/dark setting. (It was drawn before the Hosts table changed and still shows a Version column and no Shell button. The list of columns in §6 is the current one.)
 
 ## 1. Principles
 
@@ -111,12 +111,12 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
 │   │ Users        │                                                            │
 │   │ Groups       │  (6 hosts)                                                 │  count pill
 │   │ Audit log    │                                                            │
-│                  │  HOST              ADDRESSES       VERSION      LAST SEEN  │  table, no card
-│                  │  web-01            192.168.10.2    0.1.0        ● Online ⋯ │
-│                  │  Office · root     203.0.113.7     Debian 12               │
+│                  │  HOST              ADDRESSES     USAGE    STATUS           │  table, no card
+│                  │  web-01            192.168.10.2  CPU 3%   ● Online [Shell] │
+│                  │  Office · root     WAN 203.0.113.7                         │
 │                  │  ───────────────────────────────────────────────────────── │
-│ ──────────────── │  nas-studio        192.168.10.20   0.1.0        2 days ago │
-│ (A) Admin        │  Office            203.0.113.7     FreeBSD 14           ⋯ │
+│ ──────────────── │  nas-studio        192.168.10.13 —        2 days ago       │
+│ (A) Admin        │  Office            WAN 203.0.113.7                         │
 │     admin@local  │                                                            │
 └──────────────────┴────────────────────────────────────────────────────────────┘
   sidebar 240px,      main: padding 32px 40px, max width 1280px
@@ -142,6 +142,8 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
 | **Tag badge** | Small rectangle: `--bg-active`, `--text-muted`, 12–14px / 500, `--radius-xs`, 4px padding. E.g. "Office", "root", "Update available". |
 | **Status** | 8px dot + text. Online = `--ok` dot + "Online". Offline = no dot, relative time in `--text-muted` ("2 days ago"). |
 | **Table** | No surrounding box. Header: uppercase small muted. Rows: 1px `--border` bottom, 8px vertical padding, hover `--bg-hover`. First column has a bold name + muted second line. The whole row links to the detail page. |
+| **Row action** | A small secondary button (28px tall) at the end of a row, shown only when it can work. On the Hosts page: **Shell**, for an online host the current user may open a terminal on. It is a real link, and its click must not also trigger the row's own link. The label starts with the `>_` prompt, drawn as monospace text (no icon files). The column header is "Action". |
+| **Addresses cell** | Two lines, always both: `LAN: <ips>` in bold (the host's own addresses, comma-separated) and `WAN: <ip>` muted (the address the server saw the agent connect from). A dash stands in for an address that is not known yet. On the Hosts table every cell is centered vertically. |
 | **Usage** (CPU/RAM/disk on the detail page) | Number + thin 4px bar in `--accent`; `--warn-text` at ≥ 80%, `--danger` at ≥ 95%. |
 | **Menu / popover** | `--bg`, `--radius`, `--shadow-pop`, 32px items. |
 | **Dialog** | Centered, 480px wide, `--shadow-pop`, overlay `rgba(0,0,0,.4)`. Cancel (secondary) left, action right. |
@@ -152,7 +154,7 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
 
 | Page | Contents | Milestone |
 |---|---|---|
-| **Hosts** | Count pill, search, table: Host · Addresses · Version · Last seen · ⋯ | M1 |
+| **Hosts** | Count pill, search, table: Host · Addresses (LAN + WAN) · Usage · Status · Action (Shell) | M1 / M3 |
 | **Host detail** | Header (name, status, tags) + tabs: *Overview* (info + usage), *Terminal*, *Files* | M1 / M3 / M4 |
 | **Add host** | Dialog: pick a group → install command in a code block + copy | M2 |
 | **Transfers** | Upload a file → pick hosts & path → status per host | M4 |

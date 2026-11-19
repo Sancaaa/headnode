@@ -87,6 +87,14 @@ func addGroup(t *testing.T, db *sql.DB, name string) int64 {
 // addHost enrolls a host the real way and puts it in a group (0 = no group).
 func addHost(t *testing.T, db *sql.DB, name string, groupID int64) string {
 	t.Helper()
+	id, _ := addHostWithSecret(t, db, name, groupID)
+	return id
+}
+
+// addHostWithSecret is addHost for tests that need the host to connect: it also
+// returns the agent's secret.
+func addHostWithSecret(t *testing.T, db *sql.DB, name string, groupID int64) (id, secret string) {
+	t.Helper()
 	token, _, err := CreateEnrollToken(db)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +106,7 @@ func addHost(t *testing.T, db *sql.DB, name string, groupID int64) string {
 	if groupID != 0 {
 		mustExec(t, db, `UPDATE agents SET group_id = ? WHERE id = ?`, groupID, resp.AgentID)
 	}
-	return resp.AgentID
+	return resp.AgentID, resp.AgentSecret
 }
 
 func userIDOf(t *testing.T, db *sql.DB, username string) int64 {
@@ -127,6 +135,7 @@ type permWorld struct {
 	srv     *httptest.Server
 	clients map[string]*http.Client
 	hosts   map[string]string // host name -> agent id
+	secrets map[string]string // host name -> agent secret, for tests that connect the agent
 	groups  map[string]int64  // group name -> id
 }
 
@@ -139,11 +148,14 @@ func newPermWorld(t *testing.T) *permWorld {
 
 	office := addGroup(t, db, "Office")
 	lab := addGroup(t, db, "Lab")
-	w := &permWorld{s: s, srv: srv, clients: map[string]*http.Client{}, hosts: map[string]string{
-		"web-01": addHost(t, db, "web-01", office),
-		"lab-01": addHost(t, db, "lab-01", lab),
-		"orphan": addHost(t, db, "orphan", 0),
-	}, groups: map[string]int64{"Office": office, "Lab": lab}}
+	w := &permWorld{
+		s: s, srv: srv, clients: map[string]*http.Client{},
+		hosts: map[string]string{}, secrets: map[string]string{},
+		groups: map[string]int64{"Office": office, "Lab": lab},
+	}
+	for name, group := range map[string]int64{"web-01": office, "lab-01": lab, "orphan": 0} {
+		w.hosts[name], w.secrets[name] = addHostWithSecret(t, db, name, group)
+	}
 
 	for name, admin := range map[string]bool{"root": true, "alice": false, "bob": false, "carol": false, "dave": false} {
 		w.clients[name] = loginAs(t, s, srv, name, admin)
@@ -261,6 +273,19 @@ func TestHostVisibility(t *testing.T) {
 		slices.Sort(got)
 		if !slices.Equal(got, want) {
 			t.Errorf("%s sees %v, want %v", who, got, want)
+		}
+
+		// can_shell is what the Hosts page uses to decide who gets a Shell
+		// button. It must say exactly what can() says, or the button would be
+		// offered to people the server then refuses.
+		for _, h := range list {
+			allowed, err := w.s.can(w.user(t, who), w.hosts[h.Name], actionShell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.CanShell != allowed {
+				t.Errorf("%s: can_shell for %s = %v, but can(shell) = %v", who, h.Name, h.CanShell, allowed)
+			}
 		}
 
 		// ...the detail page agrees, and a hidden host is "not found", not

@@ -41,7 +41,8 @@ Since M2 every `/api/*` route except `POST /api/login` needs a login. The group 
 `GET /api/hosts` → a JSON array (`[]` when empty) of:
 ```json
 {"id":"a_4411ec05776b5fa5","name":"web-01","hostname":"web-01","os":"linux","arch":"amd64",
- "version":"0.1.0","online":true,"group_id":1,"group_name":"Office",
+ "version":"0.1.0","online":true,"wan_addr":"203.0.113.5","can_shell":true,
+ "group_id":1,"group_name":"Office",
  "last_seen_at":"2026-11-20T04:19:22Z","created_at":"2026-11-20T04:18:06Z",
  "heartbeat":{"cpu_percent":2.4,"mem_used":7516192768,"mem_total":16523436032,
               "disk_used":41000000000,"disk_total":250000000000,"uptime_sec":67240},
@@ -56,6 +57,8 @@ Since M2 every `/api/*` route except `POST /api/login` needs a login. The group 
 
 - `info` is the agent's last `hello` data (§3), or `null` before the first hello. It is in the list too, because the Hosts page shows addresses and platform.
 - `group_id` and `group_name` are `null` for a host that is in no group.
+- `wan_addr` is the address the **server** saw the agent's control connection come from, as of its last connect (§3). `""` if the agent never connected. The agent sends nothing for it. Behind Caddy it is the client address from `X-Forwarded-For`; on a local test it is `127.0.0.1`.
+- `can_shell` says whether the current user may open a terminal on this host (an operator in its group, or an admin). The Hosts page shows its Shell button only when this is true and the host is online. It is computed for the user making the request, so the same host can say `true` to one person and `false` to another.
 
 **Who sees which hosts:** an admin sees every host. Anyone else sees the hosts in groups they belong to, with any role. A host in no group is visible to admins only. `GET /api/hosts/{id}` for a host the user may not see answers `404`, the same as for an id that does not exist, so it does not reveal which hosts exist.
 
@@ -92,7 +95,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`. A failed login records the address only, never the username that was typed.
 
 #### Host management and enroll tokens (M2, admin only)
 
@@ -221,7 +224,7 @@ Only one control connection per agent is kept. If the same agent connects again,
 }}
 ```
 If `protocol` does not match, the server closes the connection with reason `"protocol mismatch"`.
-The agent does not send its WAN IP. The server reads it from the connection address. The `X-Forwarded-For` header is trusted only when the request comes from Caddy on localhost.
+The agent does not send its WAN IP. The server reads it from the connection address on every connect and stores it (`wan_addr` in the host object, §1). The `X-Forwarded-For` header is trusted only when the request comes from Caddy on localhost, and then its **last** entry is used (the one Caddy added, not anything the client wrote).
 
 **`heartbeat`**: every 20 seconds.
 ```json
@@ -255,7 +258,25 @@ The agent writes to `dest_path + ".part"` first, checks the sha256, then renames
 
 ## 4. Sessions
 
-`POST /api/hosts/{id}/sessions` with `{"kind": "...", "params": {...}}`. If the agent is offline, the response is `409 {"error":"host offline"}`.
+`POST /api/hosts/{id}/sessions` with `{"kind": "...", "params": {...}}` → `201 {"id":"s_…"}`. Only `"shell"` exists so far (M3).
+
+| Status | When |
+|---|---|
+| 201 | The session was created and the agent was told to open it (`open` on its control connection). |
+| 400 | Unsupported `kind`, or a body that is not valid JSON. |
+| 403 | The user can see the host but their role does not allow a shell (a `viewer`). |
+| 404 | The host does not exist, or the user may not see it (same answer for both). |
+| 409 | The host is offline: `{"error":"host offline"}`. |
+
+Opening a session is audited (`session_open`), and so is its end (`session_close`, with the duration).
+
+**Connecting the two sides.** After `POST`, two WebSockets must arrive:
+- the browser's: `GET /ui/sessions/{id}`. It needs the login cookie **and** an `Origin` header equal to the server's. The id only works for the user who created the session (anyone else gets `404`, admins included), and only once.
+- the agent's: `GET /agent/sessions/{id}`, with the agent's `Authorization: Bearer` header. Only the agent the session was opened on may attach (`404` for another agent), and only once.
+
+The server pairs them and copies every message from one to the other without reading it: text stays text, binary stays binary. It sends a ping on both sides every 30 seconds, so a peer that vanished without saying goodbye (a sleeping laptop) is noticed and the session ends.
+
+If the other side has not arrived 15 seconds after the session was created, the session is cancelled: whoever is waiting is closed with code `4000`. When one side closes, the other side is closed with the same code and reason. That is how "the shell exited" or "cannot start a shell: …" from the agent reaches the browser.
 
 ### `shell`
 - params: `{"cols": 120, "rows": 32}`
