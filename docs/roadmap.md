@@ -4,40 +4,40 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M0**
+**Active milestone: M2**
 
 ---
 
 ## M0 — Foundation
 - [x] Own git repo, `.gitignore`
 - [x] Docs: README, architecture, protocol, decisions, roadmap, principles, design
-- [ ] Install Go 1.22+ on the laptop
-- [ ] Prepare one Linux machine to test the agent on (VM / LXC / WSL)
-- [ ] `go mod init headnode`, empty folder layout, a server `main.go` that answers "ok"
+- [x] Install Go 1.22+ on the laptop
+- [x] Prepare one Linux machine to test the agent on (VM / LXC / WSL)
+- [x] `go mod init headnode`, empty folder layout, a server `main.go` that answers "ok"
 
 **Done when:** `go run ./cmd/headnode` runs and `http://localhost:8080` responds.
 
 ## M1 — Agent connects & host list (A1, A4, A5, C7, D1)
-- [ ] `headnode token create`: create an enroll token from the CLI
-- [ ] `POST /agent/enroll`: the agent gets an id + secret and saves them to `agent.json`
-- [ ] WS `/agent/connect`: `hello` + `heartbeat` (info read from `/proc`)
-- [ ] Reconnect with backoff
-- [ ] In-memory registry of online agents, `last_seen_at` in SQLite
-- [ ] **Hosts** page: host table, online/offline status, CPU/RAM/disk
-- [ ] **Host detail** page: full info
+- [x] `headnode token create`: create an enroll token from the CLI
+- [x] `POST /agent/enroll`: the agent gets an id + secret and saves them to `agent.json`
+- [x] WS `/agent/connect`: `hello` + `heartbeat` (info read from `/proc`)
+- [x] Reconnect with backoff
+- [x] In-memory registry of online agents, `last_seen_at` in SQLite
+- [x] **Hosts** page: host table, online/offline status, CPU/RAM/disk
+- [x] **Host detail** page: full info
 
 **Done when:** you start the agent on a VM and the host shows up *online* within 2 seconds. Stop the agent, and the host turns *offline* within 60 seconds. Restart the server, and the agent reconnects on its own.
 
 ⚠ M1 has no login yet, so the server listens **only** on `127.0.0.1` (the default). Don't deploy it to a VPS yet.
 
 ## M2 — Login, groups, permissions, audit (C1, C2, C5, A7)
-- [ ] First user created from the CLI: `headnode user create --admin`
-- [ ] Login/logout, cookie session, auth + Origin middleware
-- [ ] Groups, members + roles, the `can()` function
-- [ ] Enroll tokens from the dashboard (admin)
-- [ ] Rename / move group / delete host
+- [x] First user created from the CLI: `headnode user create --admin`
+- [x] Login/logout, cookie session, auth + Origin middleware
+- [x] Groups, members + roles, the `can()` function
+- [x] Enroll tokens from the dashboard (admin)
+- [x] Rename / move group / delete host
 - [ ] Audit log + **Audit** page
-- [ ] Simple login rate limit
+- [x] Simple login rate limit
 
 **Done when:** without login, every `/api/*` returns 401. A viewer cannot see hosts outside their groups. Every action above appears in the audit log.
 

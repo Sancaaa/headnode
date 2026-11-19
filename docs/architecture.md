@@ -157,10 +157,16 @@ cmd/hnctl/main.go           (M5) forward
 server/                     one package, split by FILE:
   http.go                   routing + login/origin middleware
   auth.go                   login, cookies, can()
+  ratelimit.go              login attempt limiter
+  permissions.go            roles, can()
+  admin.go                  admin API: users, groups, members
+  audit.go                  audit log writer
   agents.go                 online agent registry, control connections
   relay.go                  session pairing
   files.go                  upload / download / fetch
   db.go, schema.sql         SQLite access
+  enroll.go                 enroll tokens, agent enrollment
+  hosts.go                  host list / detail API
   audit.go
 agent/                      conn.go (control + reconnect), shell.go, files.go, tunnel.go, sysinfo.go
 protocol/                   JSON message structs shared by server and agent

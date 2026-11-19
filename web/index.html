@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Hosts · headnode</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<!-- "logged-out" hides the sidebar until app.js knows who is logged in -->
+<body class="logged-out">
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="org"><div class="org-mark">HN</div>headnode</div>
+    <!-- app.js fills in the links: Admin pages only show for administrators -->
+    <nav class="nav" id="nav"></nav>
+    <div class="userbox" id="userbox"></div>
+  </aside>
+
+  <main class="main">
+    <!-- app.js fills this in. There is no inline script or style anywhere in
+         web/, which is what lets the server send a strict
+         Content-Security-Policy (server/http.go). -->
+    <div class="content" id="view"></div>
+  </main>
+
+</div>
+</body>
+</html>

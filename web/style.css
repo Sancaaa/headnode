@@ -1,0 +1,278 @@
+/* Tokens and rules come from docs/design.md. Rule: no hex colors outside the
+   token blocks below, always var(--...), so light and dark both keep working. */
+
+:root {
+  --bg: #ffffff;
+  --bg-app: #f7f5f4;
+  --bg-hover: #faf9f8;
+  --bg-active: #eeebea;
+  --border: #eeebea;
+  --border-input: #dad6d5;
+  --border-hover: #afacab;
+  --text: #232222;
+  --text-muted: #706e6d;
+  --text-disabled: #afacab;
+  --text-link: #3f5db3;
+  --accent: #4b70cc;
+  --accent-hover: #3f5db3;
+  --focus: #85aaf5;
+  --ok: #1ea672;
+  --ok-text: #0e6245;
+  --warn-text: #983705;
+  --danger: #b22d30;
+  --danger-text: #940821;
+  --on-accent: #ffffff; /* text on the accent color, same in both themes */
+  --shadow-button: 0 1px 1px rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 0 0 1px var(--border), 0 15px 35px rgba(0, 0, 0, 0.12), 0 5px 15px rgba(0, 0, 0, 0.08);
+  --radius: 6px;
+  --radius-xs: 2px;
+  --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1e1e;
+    --bg-app: #181717;
+    --bg-hover: #232222;
+    --bg-active: #2e2d2d;
+    --border: #2e2d2d;
+    --border-input: #444342;
+    --border-hover: #706e6d;
+    --text: #f7f5f4;
+    --text-muted: #afacab;
+    --text-disabled: #444342;
+    --text-link: #6c94ec;
+    --accent: #3f5db3;
+    --accent-hover: #4b70cc;
+    --focus: #324994;
+    --ok: #09825d;
+    --ok-text: #1ea672;
+    --warn-text: #d97917;
+    --danger: #d04841;
+    --danger-text: #e46c63;
+    --shadow-button: 0 1px 1px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.43 var(--font);
+  letter-spacing: -0.015em;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--text-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+svg {
+  width: 16px; height: 16px; flex: none;
+  stroke: currentColor; fill: none; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* layout */
+.app { display: flex; min-height: 100%; }
+
+.sidebar {
+  width: 240px; flex: none;
+  background: var(--bg-app);
+  border-right: 1px solid var(--border);
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column;
+}
+.org { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; font-weight: 600; }
+.org-mark {
+  width: 24px; height: 24px; border-radius: var(--radius);
+  background: var(--text); color: var(--bg);
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; letter-spacing: 0;
+}
+.nav { flex: 1; padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; }
+.nav a {
+  display: flex; align-items: center; gap: 10px;
+  height: 32px; padding: 0 10px;
+  border-radius: var(--radius); color: var(--text);
+}
+.nav a:hover { background: var(--bg-active); text-decoration: none; }
+.nav a.active { background: var(--bg-active); font-weight: 500; }
+.nav svg { color: var(--text-muted); }
+
+.main { flex: 1; min-width: 0; padding: 32px 40px 96px; }
+.content { max-width: 1280px; margin: 0 auto; }
+
+h1 { font-size: 30px; line-height: 1.2; font-weight: 600; letter-spacing: -0.025em; margin: 0; }
+h2 { font-size: 18px; font-weight: 600; margin: 40px 0 8px; }
+.desc { margin: 8px 0 0; max-width: 640px; }
+.back { display: inline-block; margin-bottom: 16px; color: var(--text-muted); }
+
+/* small pieces */
+.pill {
+  display: inline-flex; align-items: center;
+  background: var(--bg-active); color: var(--text-muted);
+  font-weight: 500; border-radius: 999px;
+  padding: 4px 8px; line-height: 1; margin: 24px 0;
+}
+.tag {
+  display: inline-flex; align-items: center;
+  background: var(--bg-active); color: var(--text-muted);
+  font-size: 12px; font-weight: 500;
+  border-radius: var(--radius-xs); padding: 1px 4px; margin-right: 4px;
+}
+.sub { color: var(--text-muted); }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 8px; position: relative; top: -1px;
+}
+.warn { color: var(--warn-text); }
+.danger { color: var(--danger-text); }
+.empty { margin: 80px 0; text-align: center; color: var(--text-muted); }
+.empty.small { margin: 16px 0; text-align: left; } /* an empty section inside a page, not the whole page */
+.notice {
+  margin: 24px 0; padding: 12px 16px;
+  border: 1px solid var(--border-input); border-radius: var(--radius);
+  color: var(--warn-text);
+}
+
+/* tables */
+table { width: 100%; border-collapse: collapse; }
+th {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-muted); text-align: left;
+  padding: 8px 4px; border-bottom: 1px solid var(--border);
+}
+td { padding: 10px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--bg-hover); }
+.name { font-weight: 600; color: var(--text); }
+tr:hover .name { color: var(--text-link); }
+.col-host { width: 28%; }
+.col-addr { width: 18%; }
+.col-ver { width: 20%; }
+.col-usage { width: 16%; }
+
+/* detail page: facts list and usage bars */
+.status { margin: 8px 0 0; }
+.facts { display: grid; grid-template-columns: 180px 1fr; margin: 0; }
+.facts dt, .facts dd { margin: 0; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+.facts dt { color: var(--text-muted); }
+
+.usage { display: grid; grid-template-columns: 180px 1fr; align-items: center; row-gap: 4px; }
+.usage-row { display: contents; }
+.usage-label { padding: 10px 4px 0; color: var(--text-muted); }
+.usage-body { padding: 10px 4px 0; max-width: 480px; }
+.bar { height: 4px; margin-top: 6px; background: var(--bg-active); border-radius: 2px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); }
+.usage-row.warn .bar-fill { background: var(--warn-text); }
+.usage-row.danger .bar-fill { background: var(--danger); }
+.usage-row.warn, .usage-row.danger { color: inherit; } /* only the bar changes color */
+
+/* buttons and inputs (design.md §5) */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 36px; padding: 0 12px;
+  border-radius: var(--radius); border: 1px solid var(--border-input);
+  background: var(--bg); color: var(--text);
+  font: inherit; font-weight: 500; line-height: 1;
+  box-shadow: var(--shadow-button); cursor: pointer; white-space: nowrap;
+}
+.btn:hover { border-color: var(--border-hover); }
+.btn:disabled { color: var(--text-disabled); cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-primary:disabled { color: var(--on-accent); opacity: 0.6; }
+.link-button {
+  background: none; border: 0; padding: 0;
+  color: var(--text-link); font: inherit; cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; }
+.input {
+  width: 100%; height: 36px; padding: 0 12px;
+  border: 1px solid var(--border-input); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.input:hover { border-color: var(--border-hover); }
+.input:focus { outline: 2px solid var(--focus); outline-offset: 0; }
+
+/* the user block at the bottom of the sidebar */
+.userbox { border-top: 1px solid var(--border); padding: 8px; }
+.userbox:empty { display: none; }
+.user { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
+.user-text { flex: 1; min-width: 0; }
+.user-name { font-weight: 500; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex: none;
+  background: var(--border-input); color: var(--text);
+  display: grid; place-items: center; font-size: 11px; font-weight: 600;
+}
+
+/* login page: a centered 360px form on the app background (design.md §6) */
+body.logged-out .sidebar { display: none; }
+body.logged-out .main { background: var(--bg-app); }
+.login {
+  max-width: 360px; margin: 12vh auto 0; padding: 32px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.login .org { padding: 0 0 8px; }
+.field { display: block; margin-top: 16px; }
+.field span { display: block; margin-bottom: 4px; font-weight: 500; }
+.form-error { margin-top: 16px; color: var(--danger-text); }
+.login .btn-primary { width: 100%; margin-top: 24px; }
+
+/* page header with buttons, sidebar section label */
+.page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; }
+.page-actions { display: flex; gap: 8px; }
+.nav-label {
+  padding: 16px 10px 4px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.note { margin-top: 24px; max-width: 640px; }
+tbody tr.static { cursor: default; }
+tbody tr.static:hover { background: none; }
+.col-act { width: 80px; text-align: right; }
+.col-time { width: 200px; white-space: nowrap; }
+td.detail { word-break: break-word; }
+.tag + .tag, .name + .tag { margin-left: 8px; }
+
+/* danger: only ever as text, or as the confirm button inside a dialog */
+.danger-text { color: var(--danger-text); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
+.btn-danger:hover { opacity: 0.9; }
+.btn-danger:disabled { opacity: 0.6; }
+
+select.input { padding-right: 8px; }
+.input-small { width: auto; min-width: 120px; height: 32px; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+
+/* dialogs: the browser's <dialog> element, 480px wide (design.md §5) */
+.dialog {
+  width: 480px; max-width: calc(100vw - 32px);
+  padding: 24px; border: 0; border-radius: var(--radius);
+  background: var(--bg); color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+.dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+.dialog-title { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+.dialog p { margin: 8px 0; }
+.dialog-actions { display: flex; justify-content: space-between; margin-top: 24px; }
+.dialog-actions.end { justify-content: flex-end; }
+.code-block {
+  margin: 12px 0; padding: 12px;
+  background: var(--bg-app); border-radius: var(--radius);
+  font-family: var(--mono); font-size: 13px; word-break: break-all;
+}
+
+@media (max-width: 1024px) {
+  .sidebar { display: none; }
+  .main { padding: 24px; }
+}
+@media (max-width: 768px) {
+  .col-ver, .col-addr, .col-usage { display: none; }
+  h1 { font-size: 24px; }
+  .facts, .usage { grid-template-columns: 120px 1fr; }
+}

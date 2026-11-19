@@ -1,22 +1,94 @@
 package main
 
 import (
+	"database/sql"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"headnode/server"
 )
 
+const usage = `usage:
+  headnode [-addr host:port] [-db path]                     run the server
+  headnode token create [-db path]                          create an agent enroll token
+  headnode user create -username NAME [-admin] [-db path]   create a dashboard user
+                                                            (asks for the password, or reads it from stdin when piped)`
+
 func main() {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request){
-		fmt.Fprintln(w, "Scheme:", r.Method)
-		fmt.Fprintln(w, "Host:", r.URL)
-		fmt.Fprintln(w, "Request Host:", r.Header)
-		fmt.Fprintln(w, "Path:", r.Body)
-		fmt.Fprintln(w, "RawQuery:", r.Host)
-		fmt.Fprintln(w, "Fragment:", r.RemoteAddr)
-	})
-
-	log.Fatal(http.ListenAndServe("127.0.0.1:8080", nil))
-
+	// "token create" and "user create" are CLI commands on the server machine.
+	// They talk to the database directly, so no HTTP endpoint exists that
+	// creates tokens or users without a login (protocol.md §1).
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "token":
+			tokenCommand(os.Args[2:])
+			return
+		case "user":
+			userCommand(os.Args[2:])
+			return
+		}
+	}
+	serve(os.Args[1:])
 }
 
+func serve(args []string) {
+	fs := flag.NewFlagSet("headnode", flag.ExitOnError)
+	// 127.0.0.1 by default: the server speaks plain HTTP and Caddy, on the same
+	// machine, adds TLS (D-07). Passwords and session cookies must not travel
+	// over plain HTTP, so only listen on other addresses on a network you trust.
+	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
+	dbPath := fs.String("db", "data/headnode.db", "path of the SQLite database")
+	fs.Parse(args)
+
+	db := openDB(*dbPath)
+	defer db.Close()
+
+	httpServer := &http.Server{
+		Addr:    *addr,
+		Handler: server.New(db).Handler(),
+		// Without this, a client that opens a connection and never finishes its
+		// request headers holds that connection open forever.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	log.Printf("headnode listening on http://%s", *addr)
+	log.Fatal(httpServer.ListenAndServe())
+}
+
+func tokenCommand(args []string) {
+	if len(args) == 0 || args[0] != "create" {
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("token create", flag.ExitOnError)
+	dbPath := fs.String("db", "data/headnode.db", "path of the SQLite database")
+	fs.Parse(args[1:])
+
+	db := openDB(*dbPath)
+	defer db.Close()
+
+	token, expiresAt, err := server.CreateEnrollToken(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Printed to stdout and nothing else, so it can be captured:  TOKEN=$(headnode token create)
+	// The explanation goes to stderr for the same reason.
+	fmt.Fprintf(os.Stderr, "enroll token (valid until %s, shown only once):\n", expiresAt.Format("2006-01-02 15:04"))
+	fmt.Println(token)
+}
+
+// openDB creates the data directory if needed, then opens the database.
+func openDB(path string) *sql.DB {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Fatal(err)
+	}
+	db, err := server.OpenDB(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return db
+}
