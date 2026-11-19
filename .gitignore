@@ -1,0 +1,26 @@
+# build output
+/bin/
+/dist/
+
+# local development data
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# agent config written by enroll (contains the secret)
+agent.json
+
+# reference material, not part of the project
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# saved third-party pages used only as design reference
+/Machines - Tailscale.html
+/Machines - Tailscale_files/

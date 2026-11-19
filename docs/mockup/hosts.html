@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Hosts · headnode (mockup)</title>
+<style>
+:root{
+  --bg:#ffffff;--bg-app:#f7f5f4;--bg-hover:#faf9f8;--bg-active:#eeebea;
+  --border:#eeebea;--border-input:#dad6d5;--border-hover:#afacab;
+  --text:#232222;--text-muted:#706e6d;--text-disabled:#afacab;--text-link:#3f5db3;
+  --accent:#4b70cc;--accent-hover:#3f5db3;--focus:#85aaf5;
+  --ok:#1ea672;--ok-text:#0e6245;--warn-text:#983705;--danger:#b22d30;--danger-text:#940821;
+  --radius:6px;--radius-xs:2px;
+  --shadow-button:0 1px 1px rgba(0,0,0,.08);
+  --font:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1f1e1e;--bg-app:#181717;--bg-hover:#232222;--bg-active:#2e2d2d;
+    --border:#2e2d2d;--border-input:#444342;--border-hover:#706e6d;
+    --text:#f7f5f4;--text-muted:#afacab;--text-disabled:#444342;--text-link:#6c94ec;
+    --accent:#3f5db3;--accent-hover:#4b70cc;--focus:#324994;
+    --ok:#09825d;--ok-text:#1ea672;--warn-text:#d97917;--danger:#d04841;--danger-text:#e46c63;
+    --shadow-button:0 1px 1px rgba(0,0,0,.3);
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.43 var(--font);letter-spacing:-.015em;-webkit-font-smoothing:antialiased}
+a{color:var(--text-link);text-decoration:none}
+a:hover{text-decoration:underline}
+svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+.app{display:flex;min-height:100%}
+
+/* sidebar */
+.sidebar{width:240px;flex:none;background:var(--bg-app);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.org{display:flex;align-items:center;gap:10px;padding:16px 16px 12px;font-weight:600}
+.org-mark{width:24px;height:24px;border-radius:var(--radius);background:var(--text);color:var(--bg);display:grid;place-items:center;font-size:11px;font-weight:700;letter-spacing:0}
+.nav{flex:1;padding:4px 8px;display:flex;flex-direction:column;gap:2px}
+.nav a,.nav .group-label{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:var(--radius);color:var(--text)}
+.nav a:hover{background:var(--bg-active);text-decoration:none}
+.nav a.active{background:var(--bg-active);font-weight:500}
+.nav svg{color:var(--text-muted)}
+.group-label{cursor:default}
+.group-label .chev{margin-left:auto}
+.children{position:relative;margin-left:18px;padding-left:12px;border-left:1px solid var(--border-input);display:flex;flex-direction:column;gap:2px}
+.children a{height:30px}
+.userbox{border-top:1px solid var(--border);padding:8px}
+.user{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius)}
+.user:hover{background:var(--bg-active)}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--border-input);display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--text)}
+.user-name{font-weight:500;line-height:1.2}
+.user-sub{color:var(--text-muted);line-height:1.2}
+
+/* main */
+.main{flex:1;min-width:0;padding:32px 40px 96px}
+.content{max-width:1280px;margin:0 auto}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+h1{font-size:30px;line-height:1.2;font-weight:600;letter-spacing:-.025em;margin:0}
+.desc{margin:8px 0 0;max-width:640px}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 12px;border-radius:var(--radius);border:1px solid var(--border-input);background:var(--bg);color:var(--text);font:inherit;font-weight:500;line-height:1;box-shadow:var(--shadow-button);cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--border-hover)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.btn-min{border-color:transparent;background:transparent;box-shadow:none;padding:0;width:32px;height:32px;color:var(--text-muted)}
+.btn-min:hover{background:var(--bg-active);border-color:transparent}
+
+.toolbar{display:flex;gap:16px;margin:24px 0}
+.search{position:relative;flex:1;max-width:672px}
+.search svg{position:absolute;left:10px;top:10px;color:var(--text-muted)}
+.input{width:100%;height:36px;border:1px solid var(--border-input);border-radius:var(--radius);background:var(--bg);color:var(--text);font:inherit;padding:0 12px 0 32px}
+.input::placeholder{color:var(--text-disabled)}
+.input:hover{border-color:var(--border-hover)}
+.input:focus{outline:2px solid var(--focus);outline-offset:0}
+
+.pill{display:inline-flex;align-items:center;background:var(--bg-active);color:var(--text-muted);font-weight:500;border-radius:999px;padding:4px 8px;line-height:1;margin-bottom:24px}
+.tag{display:inline-flex;align-items:center;background:var(--bg-active);color:var(--text-muted);font-size:12px;font-weight:500;border-radius:var(--radius-xs);padding:1px 4px;margin-right:4px}
+
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);text-align:left;padding:8px 4px;border-bottom:1px solid var(--border)}
+td{padding:10px 4px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--bg-hover)}
+.name{font-weight:600}
+tr:hover .name{color:var(--text-link)}
+.sub{color:var(--text-muted)}
+.num{font-variant-numeric:tabular-nums}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:8px;position:relative;top:-1px}
+.col-host{width:34%}.col-addr{width:22%}.col-ver{width:22%}.col-seen{width:auto}.col-act{width:40px;text-align:right}
+
+.note{margin-top:40px;color:var(--text-muted);font-size:12px}
+
+@media (max-width:1024px){
+  .sidebar{display:none}
+  .main{padding:24px}
+}
+@media (max-width:768px){
+  .col-ver,.col-addr{display:none}
+  .page-head{flex-direction:column;align-items:flex-start}
+  h1{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="org"><div class="org-mark">HN</div>headnode</div>
+    <nav class="nav">
+      <a href="#" class="active">
+        <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>Hosts</a>
+      <a href="#">
+        <svg viewBox="0 0 16 16"><path d="M5 2v12M2 5l3-3 3 3M11 14V2M8 11l3 3 3-3"/></svg>Transfers</a>
+      <div class="group-label">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 14c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/></svg>Admin
+        <svg class="chev" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></div>
+      <div class="children">
+        <a href="#">Users</a>
+        <a href="#">Groups</a>
+        <a href="#">Audit log</a>
+      </div>
+    </nav>
+    <div class="userbox">
+      <div class="user">
+        <div class="avatar">AD</div>
+        <div><div class="user-name">Admin</div><div class="user-sub">admin@local</div></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="content">
+      <header class="page-head">
+        <div>
+          <h1>Hosts</h1>
+          <p class="desc">Manage the machines connected to headnode. <a href="#">How agents connect</a></p>
+        </div>
+        <button class="btn btn-primary">Add host
+          <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></button>
+      </header>
+
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          <input class="input" placeholder="Search by name, OS, IP, group…">
+        </div>
+        <button class="btn">
+          <svg viewBox="0 0 16 16"><path d="M2 4h12M4.5 8h7M7 12h2"/></svg>Filters
+          <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></button>
+      </div>
+
+      <div class="pill">6 hosts</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th class="col-host">Host</th>
+            <th class="col-addr">Addresses</th>
+            <th class="col-ver">Version</th>
+            <th class="col-seen">Last seen</th>
+            <th class="col-act"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-host"><div class="name">web-01</div><div class="sub">Debian 12 · Office</div><div><span class="tag">root</span></div></td>
+            <td class="col-addr num">192.168.10.2<div class="sub">203.0.113.7</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">Linux 6.1.0-18-amd64</div></td>
+            <td class="col-seen"><span class="dot"></span>Online</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+          <tr>
+            <td class="col-host"><div class="name">k3s-control</div><div class="sub">Debian 12 · Lab</div></td>
+            <td class="col-addr num">192.168.4.31<div class="sub">203.0.113.20</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">Linux 6.2.16-3-pve</div></td>
+            <td class="col-seen"><span class="dot"></span>Online</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+          <tr>
+            <td class="col-host"><div class="name">k3s-node-1</div><div class="sub">Debian 12 · Lab</div><div><span class="tag">Disk 93%</span></div></td>
+            <td class="col-addr num">192.168.4.29<div class="sub">203.0.113.20</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">Linux 6.2.16-3-pve</div></td>
+            <td class="col-seen"><span class="dot"></span>Online</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+          <tr>
+            <td class="col-host"><div class="name">backup-01</div><div class="sub">Ubuntu 24.04 · Office</div></td>
+            <td class="col-addr num">192.168.10.14<div class="sub">203.0.113.7</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">Linux 6.8.0-45-generic</div></td>
+            <td class="col-seen"><span class="dot"></span>Online</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+          <tr>
+            <td class="col-host"><div class="name">k3s-node-2</div><div class="sub">Debian 12 · Lab</div></td>
+            <td class="col-addr num">192.168.4.30<div class="sub">203.0.113.20</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">Linux 6.2.16-3-pve</div></td>
+            <td class="col-seen sub">3 hours ago</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+          <tr>
+            <td class="col-host"><div class="name">nas-studio</div><div class="sub">FreeBSD 14 · Office</div></td>
+            <td class="col-addr num">192.168.10.20<div class="sub">203.0.113.7</div></td>
+            <td class="col-ver num">0.1.0<div class="sub">FreeBSD 14.1-RELEASE</div></td>
+            <td class="col-seen sub">Nov 18</td>
+            <td class="col-act"><button class="btn btn-min" aria-label="Host actions"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="note">Static mockup: sample data, buttons do not work yet. Switch your OS to dark mode to see the dark theme.</p>
+    </div>
+  </main>
+</div>
+</body>
+</html>
