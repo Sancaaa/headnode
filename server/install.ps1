@@ -20,6 +20,11 @@
 # runs anything: a download that is cut short is a syntax error, and does nothing.
 param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '', [switch]$ReplaceVnc)
 
+# Printed so that a person (or whoever helps them) can tell WHICH installer ran: the
+# server hands out the script it was built with, so a server that was not redeployed
+# serves an old one. Raise the number whenever this script changes.
+Write-Host 'headnode installer, revision 7'
+
 $ErrorActionPreference = 'Stop'
 $Server = '__SERVER__'
 # TightVNC is downloaded from its makers, not bundled: it is GPL software, and the
@@ -236,6 +241,8 @@ if ($NoVnc) {
         Install-Vnc
     } catch {
         Write-Warning "The screen was not set up: $($_.Exception.Message)"
+        # Where it happened, for a failure like "Specified cast is not valid" that says nothing else.
+        Write-Warning "At: $($_.InvocationInfo.PositionMessage)"
         Write-Warning 'The agent works without it. See docs/windows.md to set up VNC by hand, or run this script again.'
     }
 }
