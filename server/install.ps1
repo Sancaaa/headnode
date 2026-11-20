@@ -71,7 +71,11 @@ try {
         Stop-Service -Name $ServiceName -Force
         $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
     }
-    Move-Item -Force -Path $tmp -Destination $Bin
+    # Delete the old program first: Move-Item -Force does not always replace an existing
+    # file on Windows PowerShell 5 ("Cannot create a file when that file already exists").
+    # If something still holds the old program, this fails with a clear message.
+    if (Test-Path $Bin) { Remove-Item -Force -Path $Bin }
+    Move-Item -Path $tmp -Destination $Bin
 } finally {
     Remove-Item -Force -ErrorAction SilentlyContinue $tmp
 }
