@@ -48,9 +48,10 @@ func LogHint() string {
 
 // RunningAsService says whether the service manager started this process.
 func RunningAsService() bool {
-	// An error means "cannot tell", which for a program started from a console
-	// is the answer no.
-	return svc.IsWindowsService()
+	// It answers with a value and an error. An error means "cannot tell", which for
+	// a program started from a console is the answer no.
+	isService, err := svc.IsWindowsService()
+	return err == nil && isService
 }
 
 // serviceCommandLine is the command the service manager runs. windows.EscapeArg

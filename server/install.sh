@@ -86,10 +86,11 @@ main() {
 
     # --- who the agent runs as. Whatever it runs as is what a terminal opened from
     # the dashboard is: so by default it is the person who ran this, not root. An
-    # update keeps the choice made when it was installed.
+    # update keeps the choice made when it was installed (the User= line of the
+    # unit). A unit with no such line is from before there was a choice: it ran as
+    # root only because nothing said otherwise, so it gets the default too.
     if [ -z "$RUN_USER" ] && [ -f "$UNIT" ]; then
         RUN_USER=$(sed -n 's/^User=//p' "$UNIT" | head -n 1)
-        [ -n "$RUN_USER" ] || RUN_USER=root    # an older unit with no User line ran as root
     fi
     [ -n "$RUN_USER" ] || RUN_USER="${SUDO_USER:-root}"
     case "$RUN_USER" in

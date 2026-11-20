@@ -67,11 +67,13 @@ func unitPath() string {
 // sign would be split or expanded: such paths are refused instead of escaped.
 //
 // runUser is the account the agent runs as, and so the account every terminal
-// and file operation it opens runs as (D-48). "" or "root" leaves out the User
-// line: systemd then runs it as root.
+// and file operation it opens runs as (D-48). "" leaves out the User line (systemd
+// then runs it as root). "root" writes User=root: the same account, but chosen on
+// purpose, which the install script can tell from an older unit that had no such
+// line and so never made a choice.
 func unitFile(exe, config, runUser string) (string, error) {
 	identity := ""
-	if runUser != "" && runUser != "root" {
+	if runUser != "" {
 		if !userNameRe.MatchString(runUser) {
 			return "", fmt.Errorf("%q is not a valid user name", runUser)
 		}

@@ -89,10 +89,12 @@ func TestUnitFileRunsTheAgentAsTheGivenUser(t *testing.T) {
 	if strings.Index(unit, "User=alice") > strings.Index(unit, "ExecStart=") || strings.Index(unit, "[Service]") > strings.Index(unit, "User=alice") {
 		t.Errorf("User= is not inside [Service] before ExecStart:\n%s", unit)
 	}
-	// "root" asked for by name is the same as nothing.
+	// "root" asked for by name is written down as User=root: the same account as
+	// no line at all, but a choice. The install script reads the line to keep it on
+	// an update, and treats a unit with no line (an older install) as never chosen.
 	rootUnit, err := unitFile("/usr/local/bin/headnode-agent", "/etc/headnode/agent.json", "root")
-	if err != nil || strings.Contains(rootUnit, "User=") {
-		t.Errorf("a unit for root: err %v, has a User line: %v", err, strings.Contains(rootUnit, "User="))
+	if err != nil || !strings.Contains(rootUnit, "User=root\n") {
+		t.Errorf("a unit for root: err %v, want User=root in it:\n%s", err, rootUnit)
 	}
 }
 
