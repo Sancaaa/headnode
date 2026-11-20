@@ -123,23 +123,35 @@ function Install-Vnc {
     # machine that has it shows no screen in the browser (D-53). With -ReplaceVnc it is
     # uninstalled here (its settings and password go with it) and 2.8.90 is installed
     # below; without it, the machine is left as it is and told how to fix it.
-    $uninstallKeys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-                     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    $tight4 = @(Get-ItemProperty $uninstallKeys -ErrorAction SilentlyContinue | Where-Object {
-        $_.DisplayName -like 'TightVNC*' -and $_.DisplayVersion -match '^(\d+)\.' -and [int]$Matches[1] -ge 4
-    })
-    if ($tight4.Count -gt 0 -and -not $ReplaceVnc) {
-        Write-Warning "TightVNC $($tight4[0].DisplayVersion) is installed. The dashboard's browser viewer cannot log in to TightVNC 4."
+    # The version is read from the server program itself, where a person can check it too:
+    #   (Get-Item "C:\Program Files\TightVNC\tvnserver.exe").VersionInfo.ProductVersion
+    $tightMajor = 0
+    foreach ($folder in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        $exe = Join-Path "$folder" 'TightVNC\tvnserver.exe'
+        if (Test-Path $exe) {
+            try { $tightMajor = ([version](Get-Item $exe).VersionInfo.ProductVersion).Major } catch { $tightMajor = 0 }
+        }
+    }
+    if ($tightMajor -ge 4 -and -not $ReplaceVnc) {
+        Write-Warning "TightVNC $tightMajor is installed. The dashboard's browser viewer cannot log in to TightVNC 4."
         Write-Warning 'To replace it with TightVNC 2.8.90, run this command again with -ReplaceVnc at the end (its settings and password are removed), or use -NoVnc to leave it alone.'
         return
     }
-    foreach ($app in $tight4) {
-        if ($app.PSChildName -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
-            Fail "cannot uninstall $($app.DisplayName): it is not an MSI package. Uninstall it in Settings > Apps, then run this command again"
+    if ($tightMajor -ge 4) {
+        # The MSI product code is the name of the program's key in the uninstall list.
+        $entries = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { "$($_.DisplayName)" -like 'TightVNC*' })
+        if ($entries.Count -eq 0) { Fail 'cannot find TightVNC in the list of installed programs: uninstall it in Settings > Apps, then run this command again' }
+        foreach ($entry in $entries) {
+            $code = "$($entry.PSChildName)"
+            if ($code -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
+                Fail "cannot uninstall $($entry.DisplayName): it is not an MSI package. Uninstall it in Settings > Apps, then run this command again"
+            }
+            Write-Host "Uninstalling $($entry.DisplayName)..."
+            $u = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', $code, '/quiet', '/norestart') -Wait -PassThru
+            if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Fail "uninstalling TightVNC failed (exit code $($u.ExitCode))" }
         }
-        Write-Host "Uninstalling $($app.DisplayName) $($app.DisplayVersion)..."
-        $u = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', $app.PSChildName, '/quiet', '/norestart') -Wait -PassThru
-        if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Fail "uninstalling TightVNC failed (exit code $($u.ExitCode))" }
     }
 
     $listening = @(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)
