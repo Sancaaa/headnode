@@ -350,6 +350,8 @@ func TestAdminRoutesRequireAdmin(t *testing.T) {
 		{"GET", "/api/audit", nil},
 		{"PATCH", "/api/hosts/a_nobody", map[string]any{"name": "x"}},
 		{"DELETE", "/api/hosts/a_nobody", nil},
+		{"GET", "/api/files", nil},
+		{"DELETE", "/api/files/f_nobody", nil},
 	}
 
 	// alice is an operator, which is the most powerful role a non-admin has.

@@ -1,0 +1,33 @@
+# headnode server, as a systemd service. Copy to /etc/systemd/system/headnode.service
+# (docs/deploy.md has the steps).
+[Unit]
+Description=headnode server
+After=network.target
+
+[Service]
+User=headnode
+Group=headnode
+
+# 127.0.0.1: only Caddy, on this machine, may talk to it (D-07). Passwords and
+# session cookies must never travel over plain HTTP.
+ExecStart=/opt/headnode/headnode -addr 127.0.0.1:8080 -db /var/lib/headnode/headnode.db -agents /opt/headnode/dist
+Restart=on-failure
+RestartSec=5
+
+# /var/lib/headnode holds the database (password hashes, agent secret hashes) and
+# the uploaded files. systemd creates it for the user above, private to that user.
+StateDirectory=headnode
+StateDirectoryMode=0700
+
+# The server needs nothing but its own state folder and the network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

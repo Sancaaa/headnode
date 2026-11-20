@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/coder/websocket"
 )
 
 // A ceiling, not a target: far more than the programs and archives this tool
@@ -114,33 +117,295 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
-	// The same bytes uploaded twice are stored once. Replacing an existing file
-	// with identical content would be pointless, so keep what is there.
-	final := filepath.Join(s.filesDir, sum)
-	if _, err := os.Stat(final); err != nil {
-		if err := os.Rename(tmpPath, final); err != nil {
-			internalError(w, "store upload", err)
-			return
-		}
-	}
-
 	idSuffix, err := randomHex(8)
 	if err != nil {
 		internalError(w, "create file id", err)
 		return
 	}
 	id := "f_" + idSuffix
-	_, err = s.db.Exec(
-		`INSERT INTO files (id, name, size, sha256, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, name, size, sum, u.ID, time.Now().Unix())
-	if err != nil {
-		internalError(w, "record upload", err)
+	if err := s.storeUpload(tmpPath, sum, id, name, size, u.ID); err != nil {
+		internalError(w, "store upload", err)
 		return
 	}
 
 	s.audit(u.ID, "", "file_upload", fmt.Sprintf("file=%s size=%d sha256=%.12s", auditText(name), size, sum))
 	slog.Info("file uploaded", "file", name, "size", size, "user", u.Username)
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "size": size, "sha256": sum})
+}
+
+// handlePullFile is POST /api/hosts/{id}/pull (protocol.md §1): take a file that
+// is on a host and store it on the server as an upload, so it can be sent to
+// other hosts ("Send to hosts" in the file manager). It is the host-to-server
+// direction of what handleUpload does for the browser, and everything after the
+// bytes arrive is the same: stored by hash, listed as an upload, sent with
+// POST /api/transfers.
+//
+// The bytes come over a `download` session (D-32), so the agent needed nothing
+// new, and they are streamed to disk while hashed: nothing is held in memory.
+func (s *Server) handlePullFile(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	hostID := r.PathValue("id")
+	if s.filesDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "file uploads are not set up on this server")
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Path == "" || len(req.Path) > 4096 || strings.ContainsRune(req.Path, 0) {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	// Reading the file needs the same permission as downloading it, and storing it
+	// needs the same as uploading: this is both at once, so it needs both.
+	if !s.requireHostAction(w, u, hostID, actionFilesRead, "you do not have permission to read files on this host") {
+		return
+	}
+	allowed, err := s.canUpload(u)
+	if err != nil {
+		internalError(w, "check permission", err)
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "you do not have permission to upload files")
+		return
+	}
+
+	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, req.Path)
+	if stream == nil {
+		if status != 0 {
+			writeError(w, status, message)
+		}
+		return
+	}
+	defer stream.close()
+	// A folder arrives as a zip archive of unknown size (-1 in the header): the
+	// agent builds it as it sends it. It is stored as an ordinary upload named
+	// "<folder>.zip", and sending it with `extract` unpacks it on the hosts.
+	isFolder := stream.head.Size < 0
+	if stream.head.Size > maxUploadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the file is larger than the %d GB limit", maxUploadBytes>>30))
+		return
+	}
+
+	tmp, err := os.CreateTemp(s.filesDir, ".upload-*") // created 0600
+	if err != nil {
+		internalError(w, "create upload file", err)
+		return
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // after a successful rename there is nothing to remove, which is fine
+	hasher := sha256.New()
+	var size int64
+	for {
+		// A host that goes quiet in the middle must not hold this request forever.
+		readCtx, cancel := context.WithTimeout(r.Context(), downloadStallTimeout)
+		kind, data, err := stream.conn.Read(readCtx)
+		cancel()
+		if err != nil {
+			if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+				break // the whole file was sent
+			}
+			tmp.Close()
+			slog.Warn("pull from host interrupted", "agent_id", hostID, "err", err)
+			writeError(w, http.StatusBadGateway, "the transfer from the host broke off")
+			return
+		}
+		if kind != websocket.MessageBinary {
+			continue
+		}
+		size += int64(len(data))
+		if size > maxUploadBytes {
+			tmp.Close()
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the file is larger than the %d GB limit", maxUploadBytes>>30))
+			return
+		}
+		if _, err := tmp.Write(data); err != nil {
+			tmp.Close()
+			internalError(w, "write upload file", err)
+			return
+		}
+		hasher.Write(data)
+	}
+	if err := tmp.Close(); err != nil {
+		internalError(w, "write upload file", err)
+		return
+	}
+	// A file that was written to while it was being copied (a log) is not the file
+	// the header described. Better to say so than to store a torn copy.
+	if !isFolder && size != stream.head.Size {
+		writeError(w, http.StatusConflict, "the file changed while it was being copied: try again")
+		return
+	}
+
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	name := cleanFileName(stream.head.Name)
+	idSuffix, err := randomHex(8)
+	if err != nil {
+		internalError(w, "create file id", err)
+		return
+	}
+	id := "f_" + idSuffix
+	if err := s.storeUpload(tmpPath, sum, id, name, size, u.ID); err != nil {
+		internalError(w, "store upload", err)
+		return
+	}
+
+	from := auditText(req.Path)
+	if isFolder {
+		from += " (a folder, zipped)"
+	}
+	s.audit(u.ID, hostID, "file_upload", fmt.Sprintf("file=%s size=%d sha256=%.12s from=%s", auditText(name), size, sum, from))
+	slog.Info("file pulled from a host", "file", name, "size", size, "folder", isFolder, "agent_id", hostID, "user", u.Username)
+	// "archive" tells the page this is a zipped folder: send it with `extract`.
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "size": size, "sha256": sum, "archive": isFolder})
+}
+
+// storeUpload puts a finished upload in its place and records it.
+//
+// The same bytes uploaded twice are stored once, as one blob (data/files/<sha256>)
+// with one row per upload, so two rows can point at the same blob. That is why
+// deleting an upload must not remove a blob that another row still uses
+// (handleDeleteFile). blobMu keeps this from interleaving with such a delete.
+func (s *Server) storeUpload(tmpPath, sum, id, name string, size, userID int64) error {
+	s.blobMu.Lock()
+	defer s.blobMu.Unlock()
+
+	final := filepath.Join(s.filesDir, sum)
+	// Replacing an existing blob with identical content would be pointless, so
+	// keep what is there.
+	if _, err := os.Stat(final); err != nil {
+		if err := os.Rename(tmpPath, final); err != nil {
+			return fmt.Errorf("store blob: %w", err)
+		}
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO files (id, name, size, sha256, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, name, size, sum, userID, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("record upload: %w", err)
+	}
+	return nil
+}
+
+// maxListedFiles is how many uploads the Uploads page shows, newest first.
+const maxListedFiles = 500
+
+type fileView struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Size       int64     `json:"size"`
+	UploadedBy *string   `json:"uploaded_by"` // null if that user has been deleted
+	CreatedAt  time.Time `json:"created_at"`
+	InUse      bool      `json:"in_use"` // a transfer of it is still running: it cannot be deleted now
+}
+
+// handleListFiles is GET /api/files (admin only): every upload on the server,
+// newest first. Uploads were not listed anywhere before: a person only saw the
+// transfers they made from them.
+func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(
+		`SELECT f.id, f.name, f.size, f.created_at, u.username
+		 FROM files f
+		 LEFT JOIN users u ON u.id = f.uploaded_by
+		 ORDER BY f.created_at DESC, f.rowid DESC
+		 LIMIT ?`, maxListedFiles)
+	if err != nil {
+		internalError(w, "list files", err)
+		return
+	}
+	defer rows.Close()
+
+	inUse := s.transfers.filesInUse()
+	files := []fileView{} // not nil, so "no uploads" is [] and not null
+	for rows.Next() {
+		var f fileView
+		var at int64
+		var username sql.NullString
+		if err := rows.Scan(&f.ID, &f.Name, &f.Size, &at, &username); err != nil {
+			internalError(w, "scan file", err)
+			return
+		}
+		f.CreatedAt = time.Unix(at, 0).UTC()
+		if username.Valid {
+			f.UploadedBy = &username.String
+		}
+		f.InUse = inUse[f.ID]
+		files = append(files, f)
+	}
+	if err := rows.Err(); err != nil {
+		internalError(w, "read files", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+// handleDeleteFile is DELETE /api/files/{id} (admin only, Origin-checked by
+// requireLogin like every change): remove one upload, and its blob when no other
+// upload shares it. There is no automatic cleanup: an admin decides (D-38).
+func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if s.filesDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "file uploads are not set up on this server")
+		return
+	}
+	id := r.PathValue("id")
+
+	s.blobMu.Lock()
+	defer s.blobMu.Unlock()
+
+	var name, sum string
+	err := s.db.QueryRow(`SELECT name, sha256 FROM files WHERE id = ?`, id).Scan(&name, &sum)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if err != nil {
+		internalError(w, "look up file", err)
+		return
+	}
+
+	// An agent that was told to fetch this file is downloading it right now, or
+	// about to. Taking it away would make that transfer fail half way.
+	if s.transfers.filesInUse()[id] {
+		writeError(w, http.StatusConflict, "this file is being sent to a host right now: wait for the transfer to finish, then delete it")
+		return
+	}
+
+	if _, err := s.db.Exec(`DELETE FROM files WHERE id = ?`, id); err != nil {
+		internalError(w, "delete file", err)
+		return
+	}
+
+	// The blob goes only when this was the last row that used it.
+	var others int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE sha256 = ?`, sum).Scan(&others); err != nil {
+		// The row is gone. Keeping the blob is the safe side of not knowing.
+		slog.Error("count other uploads of a blob", "sha256", sum, "err", err)
+		others = 1
+	}
+	blob := "kept (another upload uses it)"
+	var removeErr error
+	if others == 0 {
+		blob = "removed"
+		// sum is hex from our own database, never a path from the request.
+		if err := os.Remove(filepath.Join(s.filesDir, sum)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removeErr = err
+			blob = "NOT removed: " + err.Error()
+		}
+	}
+
+	s.audit(u.ID, "", "upload_delete", fmt.Sprintf("file=%s sha256=%.12s blob=%s", auditText(name), sum, auditText(blob)))
+	slog.Info("upload deleted", "file", name, "blob", blob, "user", u.Username)
+	if removeErr != nil {
+		slog.Error("remove blob", "sha256", sum, "err", removeErr)
+		writeError(w, http.StatusInternalServerError, "the upload was removed from the list, but its data could not be deleted from the disk: see the server log")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeUploadError(w http.ResponseWriter, err error) {

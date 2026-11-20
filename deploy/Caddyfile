@@ -1,0 +1,11 @@
+# Caddy in front of headnode (D-07). Replace the name with yours, and point its
+# DNS record at this machine: Caddy then gets and renews the HTTPS certificate by
+# itself. WebSockets (terminal, files, tunnels, agents) pass through untouched.
+#
+# Caddy adds X-Forwarded-For and X-Forwarded-Proto, which headnode believes only
+# when the request comes from this same machine (protocol.md §1).
+headnode.example.com {
+	reverse_proxy 127.0.0.1:8080
+
+	header Strict-Transport-Security "max-age=31536000"
+}

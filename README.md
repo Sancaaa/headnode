@@ -26,6 +26,7 @@ The agent opens the connection to the server, not the other way around. That is 
 | [docs/roadmap.md](docs/roadmap.md) | Milestones M0–M6 with done criteria | you want to know what comes next |
 | [docs/principles.md](docs/principles.md) | Ground rules: YAGNI, code style, git | before writing code |
 | [docs/design.md](docs/design.md) | UI guide (minimal dashboard style) | you build a web page |
+| [docs/deploy.md](docs/deploy.md) | Run the server on a VPS behind Caddy, and add hosts with one command | you put it on the internet |
 
 ## Components
 

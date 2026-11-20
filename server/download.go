@@ -71,68 +71,23 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.sessions.create(u.ID, hostID, protocol.KindDownload)
-	if err != nil {
-		internalError(w, "create session", err)
+	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, path)
+	if stream == nil {
+		if status != 0 { // 0: the browser went away while we waited
+			writeError(w, status, message)
+		}
 		return
 	}
-	defer s.sessions.end(sess)
+	defer stream.close()
+	agentConn, head := stream.conn, stream.head
 
-	params, err := json.Marshal(protocol.DownloadParams{Path: path})
-	if err != nil {
-		internalError(w, "encode session parameters", err)
-		return
+	// Recorded when the transfer starts, with the path as it was asked for. A
+	// folder is zipped as it is sent, so its size is not known yet.
+	size := strconv.FormatInt(head.Size, 10)
+	if head.Size < 0 {
+		size = "unknown (a folder, sent as a zip)"
 	}
-	err = s.agents.send(hostID, protocol.TypeOpen, protocol.Open{SessionID: sess.id, Kind: sess.kind, Params: params})
-	if errors.Is(err, errAgentOffline) {
-		writeError(w, http.StatusConflict, "host offline")
-		return
-	}
-	if err != nil {
-		slog.Error("ask agent to open a download", "agent_id", hostID, "err", err)
-		writeError(w, http.StatusBadGateway, "could not reach the host")
-		return
-	}
-
-	// No browser attaches to this session: its id never leaves the server. Mark
-	// the browser's side taken anyway, so nothing could.
-	sess.claimBrowser()
-
-	var agentConn *websocket.Conn
-	select {
-	case agentConn = <-sess.agentConn:
-	case <-sess.done: // the 15-second countdown ran out
-		writeError(w, http.StatusGatewayTimeout, "the host did not answer in time")
-		return
-	case <-r.Context().Done():
-		return
-	}
-	defer agentConn.CloseNow()
-	if !sess.tryPair() {
-		writeError(w, http.StatusGatewayTimeout, "the host did not answer in time")
-		return
-	}
-	agentConn.SetReadLimit(relayReadLimit)
-
-	// The first frame says what is coming. If the file cannot be read, the agent
-	// sends no header and closes with the reason instead, and we can still
-	// answer with a proper HTTP error because nothing has been sent yet.
-	headerCtx, cancel := context.WithTimeout(r.Context(), sessionPairTimeout)
-	kind, data, err := agentConn.Read(headerCtx)
-	cancel()
-	if err != nil {
-		status, message := downloadFailure(err)
-		writeError(w, status, message)
-		return
-	}
-	var head protocol.DownloadHeader
-	if kind != websocket.MessageText || json.Unmarshal(data, &head) != nil {
-		writeError(w, http.StatusBadGateway, "the host sent an unexpected answer")
-		return
-	}
-
-	// Recorded when the transfer starts, with the path as it was asked for.
-	s.audit(u.ID, hostID, "file_download", "path="+auditText(path)+" size="+strconv.FormatInt(head.Size, 10))
+	s.audit(u.ID, hostID, "file_download", "path="+auditText(path)+" size="+size)
 
 	h := w.Header()
 	h.Set("Content-Type", "application/octet-stream") // never something the browser would render
@@ -168,6 +123,89 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 			return // the browser went away; the deferred closes stop the agent
 		}
 	}
+}
+
+// hostFile is a `download` session that is open and has sent its header: the
+// bytes of the file (or of a zipped folder) are next on conn.
+type hostFile struct {
+	conn *websocket.Conn
+	head protocol.DownloadHeader
+	end  func()
+}
+
+// close ends the session and the connection to the host. Safe to call twice.
+func (f *hostFile) close() {
+	f.conn.CloseNow()
+	f.end()
+}
+
+// openHostFile asks a host to send one file and waits for the header that says
+// it can. Both the browser's download and "send this file to other hosts" start
+// here: the server plays the browser's part (D-32) and the caller decides where
+// the bytes go.
+//
+// On failure it returns nil with the HTTP status and message to answer with.
+// Status 0 means the caller's own request ended while we waited: answer nothing.
+func (s *Server) openHostFile(ctx context.Context, userID int64, hostID, path string) (*hostFile, int, string) {
+	sess, err := s.sessions.create(userID, hostID, protocol.KindDownload)
+	if err != nil {
+		slog.Error("create session", "err", err)
+		return nil, http.StatusInternalServerError, "internal error"
+	}
+	fail := func(status int, message string) (*hostFile, int, string) {
+		s.sessions.end(sess)
+		return nil, status, message
+	}
+
+	params, err := json.Marshal(protocol.DownloadParams{Path: path})
+	if err != nil {
+		slog.Error("encode session parameters", "err", err)
+		return fail(http.StatusInternalServerError, "internal error")
+	}
+	err = s.agents.send(hostID, protocol.TypeOpen, protocol.Open{SessionID: sess.id, Kind: sess.kind, Params: params})
+	if errors.Is(err, errAgentOffline) {
+		return fail(http.StatusConflict, "host offline")
+	}
+	if err != nil {
+		slog.Error("ask agent to open a download", "agent_id", hostID, "err", err)
+		return fail(http.StatusBadGateway, "could not reach the host")
+	}
+
+	// No browser attaches to this session: its id never leaves the server. Mark
+	// the browser's side taken anyway, so nothing could.
+	sess.claimBrowser()
+
+	var agentConn *websocket.Conn
+	select {
+	case agentConn = <-sess.agentConn:
+	case <-sess.done: // the 15-second countdown ran out
+		return fail(http.StatusGatewayTimeout, "the host did not answer in time")
+	case <-ctx.Done():
+		return fail(0, "")
+	}
+	if !sess.tryPair() {
+		agentConn.CloseNow()
+		return fail(http.StatusGatewayTimeout, "the host did not answer in time")
+	}
+	agentConn.SetReadLimit(relayReadLimit)
+
+	// The first frame says what is coming. If the file cannot be read, the agent
+	// sends no header and closes with the reason instead, and we can still
+	// answer with a proper HTTP error because nothing has been sent yet.
+	headerCtx, cancel := context.WithTimeout(ctx, sessionPairTimeout)
+	kind, data, err := agentConn.Read(headerCtx)
+	cancel()
+	if err != nil {
+		agentConn.CloseNow()
+		status, message := downloadFailure(err)
+		return fail(status, message)
+	}
+	var head protocol.DownloadHeader
+	if kind != websocket.MessageText || json.Unmarshal(data, &head) != nil {
+		agentConn.CloseNow()
+		return fail(http.StatusBadGateway, "the host sent an unexpected answer")
+	}
+	return &hostFile{conn: agentConn, head: head, end: func() { s.sessions.end(sess) }}, 0, ""
 }
 
 // downloadFailure turns the agent's close (or silence) into an HTTP status and

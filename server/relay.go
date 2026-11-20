@@ -12,8 +12,10 @@ import (
 
 const (
 	// A terminal burst or a file chunk fits easily. The library default (32 KB)
-	// is a little tight for a PTY that can read more than that at once.
-	relayReadLimit = 1 << 20
+	// is a little tight for a PTY that can read more than that at once. 4 MB
+	// also lets the editor save a file of protocol.MaxEditBytes: it travels as
+	// one JSON message, which is bigger than the text once it is escaped.
+	relayReadLimit = 4 << 20
 
 	// A session can sit idle for hours. A ping every 30 s keeps routers and
 	// proxies from dropping the connection, and it is also how we notice that

@@ -16,10 +16,13 @@ import (
 )
 
 // Version is the agent's own version, sent in hello and shown on the host's
-// page. 0.2.0 added file transfers (`fetch`) and 0.3.0 the file change reports
-// (`file_change`): an older agent ignores the command or stays silent, so the
-// version is how a person can tell whether a host is up to date.
-const Version = "0.3.0"
+// page. 0.2.0 added file transfers (`fetch`), 0.3.0 the file change reports
+// (`file_change`), 0.4.0 the file manager's copy, chmod and props, and 0.5.0 the
+// editor's read and write and folder downloads (zip), and 0.6.0 the unpacking of
+// a folder sent to the host (`fetch` with extract): an older agent ignores the
+// command, stays silent or answers "unknown operation", so the version is how a
+// person can tell whether a host is up to date.
+const Version = "0.6.0"
 
 const (
 	heartbeatInterval = 20 * time.Second

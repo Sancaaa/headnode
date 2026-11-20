@@ -14,14 +14,17 @@ All API responses are JSON. Errors use the shape `{"error": "message"}` with a m
 |---|---|---|---|
 | `POST` | `/api/login` | `{username, password}` → sets the `hn_session` cookie | M2 |
 | `POST` | `/api/logout` | Ends the login session | M2 |
-| `GET` | `/api/me` | Current user and their roles | M2 |
+| `GET` | `/api/me` | Current user, what they may do, and the server's version and start time | M2 |
 | `GET` | `/api/hosts` | Agents the user may see, with online status | M1 |
 | `GET` | `/api/hosts/{id}` | Details of one agent | M1 |
 | `PATCH` | `/api/hosts/{id}` | Change `name` / `group_id` | M2 |
 | `DELETE` | `/api/hosts/{id}` | Delete an agent; its secret stops working | M2 |
 | `POST` | `/api/hosts/{id}/sessions` | `{kind, params}` → `{id}` (see §4) | M3 |
-| `GET` | `/api/hosts/{id}/download?path=…` | Download a file from a host (streamed) | M4 |
+| `GET` | `/api/hosts/{id}/download?path=…` | Download a file from a host (streamed), or a folder as a zip | M4 |
+| `POST` | `/api/hosts/{id}/pull` | `{path}` → copy a file from a host to the server's uploads → `{id, name, size, sha256}` | M5.5 |
 | `POST` | `/api/files` | Multipart upload → `{id, name, size, sha256}` | M4 |
+| `GET` | `/api/files` | Every upload on the server, newest first (admin) | M5.5 |
+| `DELETE` | `/api/files/{id}` | Delete an upload and, if nothing else uses it, its file on disk (admin) | M5.5 |
 | `POST` | `/api/transfers` | `{file_id, agent_ids[], dest_path, mode}` → the transfer, with a status per host | M4 |
 | `GET` | `/api/transfers` | The user's transfers, newest first (an admin sees everyone's, at most 50) | M4 |
 | `GET` | `/api/transfers/{id}` | Status per agent: `pending` / `ok` / `error` | M4 |
@@ -97,7 +100,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `file_download`, `file_upload`, `file_mkdir`, `file_rename`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
 
 #### Uploading and sending files (M4)
 
@@ -114,6 +117,8 @@ Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group
 | 413 | Larger than 4 GB. |
 
 **`POST /api/transfers`**: `{"file_id":"f_…","agent_ids":["a_…","a_…"],"dest_path":"/usr/local/bin/k3s-manager","mode":"0755"}`. `mode` is three octal digits (`644`, `0755`) and defaults to `0644`. At most 200 hosts. The user needs `files_write` on **every** host, and the file must be their own upload (an admin may send any). Everything is checked before anything is sent: one bad host refuses the whole request, and none of the others is started.
+
+With `"extract": true` the file must be a `.zip` (`400` otherwise) and `dest_path` is an **existing folder** the archive is unpacked into, instead of a path to save the file at. `mode` is not used then (it is ignored, and the transfer's `mode` is `""`): every file keeps the mode it had in the archive. The transfer object has `"extract": true`, and the audit entry `transfer_start` ends with ` unpack=yes`. This is how a whole folder is sent: the file manager's "Send to hosts…" copies the folder to the server as a zip (`pull`, below), then sends it with `extract`. See `fetch` in §3 for what the agent checks.
 
 | Status | When |
 |---|---|
@@ -133,6 +138,34 @@ Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group
 
 **`GET /api/transfers/{id}`** returns the same object with the current status of each host: `pending`, `ok` or `error` (with `error` text). Only the user who started the transfer, or an admin, can read it (`404` for anyone else). `host_name` is `null` if the host has been deleted since.
 
+**`POST /api/hosts/{id}/pull`**: `{"path":"/etc/app/app.conf"}`. Copies a file **or a folder** from a host to the server and stores it as an upload (a folder arrives as a zip archive named `<folder>.zip`, built as it is sent, exactly as for a folder download; the reply then has `"archive": true`, and it is sent on with `extract`) (the same as `POST /api/files`, so it is listed, can be sent with `POST /api/transfers`, and an admin can delete it). It is what "Send to hosts…" in the file manager uses. The bytes come over a `download` session and are streamed to disk while they are hashed. The user needs `files_read` on the host **and** the right to upload (`403` otherwise); `404` for a host they cannot see. The reply is the same as an upload's, plus `archive`: `201 {"id","name","size","sha256","archive":false}`. The audit log has `file_upload` with `from=<path>` (and ` (a folder, zipped)` for a folder), on that host.
+
+| Status | When |
+|---|---|
+| 400 | No `path`, or a path over 4096 bytes. |
+| 403 | No permission to read on the host, no right to upload, or a missing/foreign `Origin`. |
+| 404 | The host does not exist or cannot be seen, or the file is not there. |
+| 409 | The host is offline, or the file changed size while it was being copied (a log that is written to): nothing is stored. |
+| 413 | Larger than 4 GB. |
+| 502 | The host broke off in the middle: nothing is stored. |
+
+**`GET /api/files`** (admin only, `403` for anyone else) returns an array (`[]` when empty) of every upload, newest first, at most 500. Uploads are never removed by the server itself.
+```json
+← 200 [{"id":"f_5a1c…","name":"k3s-manager","size":15728640,"uploaded_by":"alice",
+        "created_at":"2026-11-20T09:00:00Z","in_use":false}]
+```
+`uploaded_by` is `null` if that user has been deleted. `in_use` is true while a transfer of the file is still waiting for a host.
+
+**`DELETE /api/files/{id}`** (admin only, and Origin-checked like every change) deletes one upload. The same bytes uploaded twice are two uploads that share one file on disk (`data/files/<sha256>`), so the file on disk is removed only when no other upload still points at it. Past transfers of it stay in the transfer list.
+
+| Status | When |
+|---|---|
+| 204 | Deleted. The audit log has `upload_delete`, with the file name, the first 12 characters of its hash, and `blob=removed` or `blob=kept (another upload uses it)`. |
+| 403 | Not an admin, or a missing/foreign `Origin`. |
+| 404 | No such upload. |
+| 409 | A transfer of this file is still waiting for a host (`{"error":"this file is being sent to a host right now: …"}`). Delete it after the transfer finishes. A transfer that has been unanswered for more than an hour no longer blocks. |
+| 500 | The row was removed but the file could not be deleted from disk. The server log says why. |
+
 Status is kept in the server's memory (D-03) for 24 hours. A host whose control connection drops while its transfer is pending is marked `error` with `"the host disconnected before it reported a result"`, since it can no longer report. The file may in fact have arrived. The audit log has `file_upload`, `transfer_start` (once, with the file, the first 12 characters of its hash, the destination and the number of hosts) and `transfer_result` (once per host).
 
 #### Host management and enroll tokens (M2, admin only)
@@ -141,7 +174,7 @@ Status is kept in the server's memory (D-03) for 24 hours. A host whose control 
 |---|---|
 | `PATCH /api/hosts/{id}` | `200` + the updated host object. Body: `name` and/or `group_id`. See below. |
 | `DELETE /api/hosts/{id}` | `204`. The host's secret stops working immediately and a live control connection is closed. `404` if unknown. |
-| `POST /api/enroll-tokens` `{"group_id"}` | `201 {"token","expires_at","group_id","group_name","install_command"}`. `group_id` is a group id, or `null` or left out for **no group**. `404` if the group is unknown. The body must be a JSON object (`{}` is fine). |
+| `POST /api/enroll-tokens` `{"group_id"}` | `201 {"token","expires_at","group_id","group_name","install_command"}` (`install_command` is `curl -fsSL <server>/install.sh \| sudo sh -s -- --token <token>`). `group_id` is a group id, or `null` or left out for **no group**. `404` if the group is unknown. The body must be a JSON object (`{}` is fine). |
 
 `PATCH` body fields, both optional, at least one required (`400` otherwise):
 - `"name"`: the display name, 1-255 characters, no control characters. The `hostname` the agent reported does not change.
@@ -180,7 +213,7 @@ Set-Cookie: hn_session=<64 hex characters>; Path=/; Max-Age=604800; HttpOnly; Sa
 
 `POST /api/logout` → `204`. Deletes the session on the server and clears the cookie.
 
-`GET /api/me` → `{"id":1,"username":"admin","is_admin":true,"can_upload":true}`. `can_upload` is true for an admin and for anyone who is an operator in at least one group; the page shows the Transfers link only to them.
+`GET /api/me` → `{"id":1,"username":"admin","is_admin":true,"can_upload":true,"server_version":"0.1.0","server_started_at":"2026-11-20T08:00:00Z"}`. `can_upload` is true for an admin and for anyone who is an operator in at least one group; the page shows the Transfers link only to them. `server_version` and `server_started_at` feed the line under "headnode" at the top of the sidebar (`0.1.0 · up 3h 12m`): the server sends the moment it started and the browser counts the uptime, so nothing needs to be asked again.
 
 Rules for every other `/api/*` request:
 - No valid session → `401 {"error":"login required"}`. This also applies to paths that do not exist.
@@ -197,9 +230,33 @@ Rules for every other `/api/*` request:
 | `GET` (WS) | `/agent/connect` | Control connection (§3) |
 | `GET` (WS) | `/agent/sessions/{id}` | The agent's side of a session (§4) |
 | `GET` | `/agent/files/{id}` | Download a file for `fetch`. Served only to an agent that has a pending transfer of exactly that file (`404` for anyone else, `401` without credentials). Supports `Range`. |
-| `GET` | `/install.sh`, `/download/headnode-agent-{os}-{arch}` | Installer and agent binary (M6) |
+| `GET` | `/download/headnode-agent-{os}-{arch}` | The agent program for one platform. **No login**: see below. |
+| `GET` | `/install.sh` | The installer script, with this server's address filled in. **No login.** |
 
 Every agent endpoint except `enroll` and the installer downloads must carry `Authorization: Bearer <agent_id>.<agent_secret>`.
+
+#### `GET /install.sh` (M6)
+
+A POSIX shell script, `text/x-shellscript`, that a new host pipes into `sh`. It is what the dashboard's **Add host** command runs:
+
+```sh
+curl -fsSL https://headnode.example.com/install.sh | sudo sh -s -- --token <TOKEN>
+```
+
+The server fills in its own address (`__SERVER__` in the script) from the request: the scheme comes from `X-Forwarded-Proto` behind Caddy and the host from the `Host` header. Because the client chooses the `Host` header, the address is checked against a strict pattern (a scheme, a host name or IP address, an optional port) and the request is refused with `400` if it does not match, so nothing can end the quotes the address sits in. The reply has `Cache-Control: no-store`. No login is needed, and the script holds no secret: the token is given on the command line.
+
+What the script does, as root, on Linux with systemd (`amd64` or `arm64`): downloads `/download/headnode-agent-linux-<arch>` to `/usr/local/bin/headnode-agent` (through a temporary file and an atomic rename, so a running agent is never replaced by half a file); if `/etc/headnode/agent.json` does not exist, enrolls with `--token` and saves it there (folder `0700`, file `0600`); then runs `headnode-agent service install`, which writes a systemd unit, enables it and restarts it. Run again **without** `--token` on a host that is enrolled, it only updates the program and restarts the service. All of it runs inside one function called on the last line, so a download that is cut short does nothing.
+
+#### `GET /download/headnode-agent-{os}-{arch}` (M6)
+
+The agent program, as `application/octet-stream`, for a platform the server has: `headnode-agent-linux-amd64` and `headnode-agent-linux-arm64` so far (Linux only, D-12). It needs no login, because a host that is about to enroll has nothing to log in with, and the install command has to fetch it first. That is safe because the program holds no secret: a host belongs to this server only through its enroll token. `Range` is supported, and `Cache-Control: no-cache` makes sure a rebuilt program reaches the next install.
+
+| Status | When |
+|---|---|
+| 200 / 206 | The program (or the part asked for). |
+| 404 | The name is not one of the offered platforms (the list is fixed in the server, so a name can never reach another file), or the server has no agents folder, or that build is not in it (`scripts/build-agents` makes them). |
+
+The server reads them from the folder given with `headnode -agents DIR` (default `dist/`). `scripts/build-agents.ps1` (Windows) and `scripts/build-agents.sh` build every platform into it.
 
 #### `POST /agent/enroll`
 
@@ -288,9 +345,9 @@ The server treats the agent as **dead** if no message at all arrives within 60 s
 {"type":"file_change","data":{"session_id":"s_3a7c…","op":"rename","path":"/root/a.txt","to":"/root/b.txt","ok":true}}
 {"type":"file_change","data":{"session_id":"s_3a7c…","op":"delete","path":"/etc/shadow","recursive":false,"ok":false,"error":"permission denied"}}
 ```
-`op` is `mkdir`, `rename` or `delete`. `path` is the path acted on (for a rename, the old one). `to` is the new path and appears only for a rename. `recursive` appears only for a delete, and only when true. `error` is short text and appears only when `ok` is false. The report says **what** happened and never **who** did it: the server finds the user from `session_id`, which it created for that user.
+`op` is `mkdir`, `rename`, `copy`, `chmod`, `write` or `delete`. `path` is the path acted on (for a rename or a copy, the old one). `to` is the new path and appears only for a rename or a copy. `recursive` appears only for a delete, and only when true. `mode` appears only for a chmod: the mode that was asked for, even when it was refused. `size` appears only for a write: how many bytes were sent to be written (the text itself is never reported or audited: a file can hold a password). `error` is short text and appears only when `ok` is false. The report says **what** happened and never **who** did it: the server finds the user from `session_id`, which it created for that user.
 
-Not reported: reads (`list`, `stat`, `home`), and any change a read-only session refused (nothing was attempted). The server drops, with a warning in its log, a report whose session id is unknown, is not a `files` session, or was opened on a different agent. It keeps the owner of an ended `files` session for 5 minutes, because this message travels on the control connection and the session's traffic on another, so the last report can arrive just after the session ended. A report that cannot be sent is lost (the agent logs a warning); it never breaks the session. The server records each one as the audit action `file_mkdir`, `file_rename` or `file_delete`, with `path=<path>` (a rename: `path=<old> -> <new>`, a recursive delete: `path=<path> recursive=true`) and, on failure, ` FAILED: <error>`.
+Not reported: reads (`list`, `stat`, `home`, `props`), and any change a read-only session refused (nothing was attempted). The server drops, with a warning in its log, a report whose session id is unknown, is not a `files` session, or was opened on a different agent. It keeps the owner of an ended `files` session for 5 minutes, because this message travels on the control connection and the session's traffic on another, so the last report can arrive just after the session ended. A report that cannot be sent is lost (the agent logs a warning); it never breaks the session. The server records each one as the audit action `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write` or `file_delete`, with `path=<path>` (a rename or a copy: `path=<old> -> <new>`, a recursive delete: `path=<path> recursive=true`, a chmod: `path=<path> mode=<mode>`, a write: `path=<path> size=<bytes>`) and, on failure, ` FAILED: <error>`.
 
 ### Server → Agent
 
@@ -307,7 +364,11 @@ The agent then dials `wss://…/agent/sessions/s_3a7c…`. If the agent fails to
 ```
 The agent writes to `dest_path + ".part"` first, checks the sha256, then renames. That way a half-written file never appears at the target path.
 
-In detail, the agent: (1) requires `dest_path` to be absolute and `mode` to be at most `0777` (no setuid, setgid or sticky bits); (2) downloads `GET /agent/files/{file_id}` with its own credentials; (3) writes the bytes to a temporary `.part` file in the same folder, named `<name>.<random>.part` and created `0600`, hashing them as they arrive (the random part means two transfers to the same path, or an attempt that was killed half way, never share a file); (4) compares the byte count with `size` and the hash with `sha256`; (5) flushes the file to disk, sets its `mode`, and renames it over `dest_path`. An existing file at `dest_path` is replaced, and because the replacement is a rename, a program that is running right now can be replaced too. If anything fails, the `.part` file is removed and `dest_path` is exactly as it was. The folder of `dest_path` must already exist. Then it answers with `fetch_result`, whose `error` is short plain text (`"permission denied"`, `"the file did not arrive intact (checksum mismatch)"`, …). A transfer to a host that is offline is not queued: it fails at once with `"host offline"` (D-03).
+In detail, the agent: (1) requires `dest_path` to be absolute and `mode` to be at most `0777` (no setuid, setgid or sticky bits); (2) downloads `GET /agent/files/{file_id}` with its own credentials; (3) writes the bytes to a temporary `.part` file in the same folder, named `<name>.<random>.part` and created `0600`, hashing them as they arrive (the random part means two transfers to the same path, or an attempt that was killed half way, never share a file); (4) compares the byte count with `size` and the hash with `sha256`; (5) flushes the file to disk, sets its `mode`, and renames it over `dest_path`. An existing file at `dest_path` is replaced, and because the replacement is a rename, a program that is running right now can be replaced too. If anything fails, the `.part` file is removed and `dest_path` is exactly as it was. The folder of `dest_path` must already exist.
+
+**`fetch` with `"extract": true`** (a whole folder, D-43): the file is a zip archive and `dest_path` is an existing **folder**. Steps 2 to 4 are the same, with the temporary file inside `dest_path`; then, instead of renaming it, the agent unpacks the archive and removes it. The archive comes from outside the agent, so it is treated as hostile: every entry path is checked **before anything is written**, and one that is absolute, contains `..` or a backslash makes the whole archive refused (`"the archive is not safe to unpack…"`); links and special files are refused the same way; at most 100,000 entries and 16 GB, and the size is enforced while writing, not only trusted from the headers; modes are kept but only the nine rwx bits (nothing arrives setuid). Everything is unpacked into a staging folder inside `dest_path` first, and the top-level items are moved in only if **none of them exists yet** (`"\"project\" already exists in the destination folder"`): a refused or failed unpack leaves `dest_path` exactly as it was. Files that are in `dest_path` already and are not in the archive are never touched. An agent older than 0.6.0 does not know `extract`: it fails the transfer (it cannot rename a file over a folder).
+
+Then it answers with `fetch_result`, whose `error` is short plain text (`"permission denied"`, `"the file did not arrive intact (checksum mismatch)"`, …). A transfer to a host that is offline is not queued: it fails at once with `"host offline"` (D-03).
 
 ## 4. Sessions
 
@@ -339,9 +400,9 @@ If the other side has not arrived 15 seconds after the session was created, the 
 
 ### `files`
 - The browser asks with `{"kind":"files","params":{}}` and gets `201 {"id":"s_…","readonly":true|false}`. Any `params` it sends are ignored.
-- The **server** decides what the session may do and tells the agent in `open`: `{"readonly":true}` when the user has the `files_read` permission but not `files_write` (a viewer). In a read-only session the agent refuses `mkdir`, `rename` and `delete` with `"this session is read-only"`. This is how a role is enforced even though the relay never reads the requests (D-27, D-31). A user without `files_read` gets `403`.
+- The **server** decides what the session may do and tells the agent in `open`: `{"readonly":true}` when the user has the `files_read` permission but not `files_write` (a viewer). In a read-only session the agent refuses `mkdir`, `rename`, `copy`, `chmod`, `write` and `delete` with `"this session is read-only"`. This is how a role is enforced even though the relay never reads the requests (D-27, D-31). A user without `files_read` gets `403`.
 - Text-frame request/response. `id` matches each response to its request. Binary frames are ignored.
-- The relay never reads these requests, so the **agent** reports every `mkdir`, `rename` and `delete` it ran to the server as a `file_change` message on the control connection (§3, D-37), and the server audits it under the session's user.
+- The relay never reads these requests, so the **agent** reports every `mkdir`, `rename`, `copy`, `chmod`, `write` and `delete` it ran to the server as a `file_change` message on the control connection (§3, D-37), and the server audits it under the session's user.
 
 ```json
 → {"id":1,"op":"list","path":"/root"}
@@ -352,6 +413,16 @@ If the other side has not arrived 15 seconds after the session was created, the 
 → {"id":4,"op":"delete","path":"/root/new","recursive":true}
 → {"id":5,"op":"stat","path":"/root/b.txt"}
 ← {"id":5,"ok":false,"error":"no such file or directory"}
+
+→ {"id":6,"op":"copy","from":"/root/app","to":"/tmp/app (1)"}
+→ {"id":7,"op":"chmod","path":"/root/run.sh","mode":"0755"}
+→ {"id":9,"op":"read","path":"/root/app.conf"}
+← {"id":9,"ok":true,"text":"port = 8080\n","version":"1763600000000000000-12"}
+→ {"id":10,"op":"write","path":"/root/app.conf","content":"port = 9090\n","version":"1763600000000000000-12"}
+← {"id":10,"ok":true,"version":"1763600100000000000-12"}
+→ {"id":8,"op":"props","path":"/root/app"}
+← {"id":8,"ok":true,"props":{"name":"app","is_dir":true,"is_link":false,"mode":"drwxr-xr-x","perm":"0755",
+     "owner":"root","group":"root","mod_time":"2026-11-19T10:00:00Z","size":8123456,"files":120,"dirs":9}}
 ```
 Paths are always absolute. The agent rejects relative paths (`"path must be absolute"`).
 
@@ -362,11 +433,17 @@ Details of each operation:
 - `mkdir` makes **one** level: a missing parent is an error. It fails if the path exists, with `"a folder with that name already exists"` or `"a file with that name already exists"`, whichever is in the way.
 - `rename` fails with `"destination already exists"` instead of replacing a file.
 - `delete`: a directory that is not empty needs `"recursive":true`. Deleting the root directory is always refused. A path that is not there is an error.
+- `copy` copies a file, or a folder with everything in it, to a path that does **not** exist: like `rename`, it fails with `"destination already exists"` instead of replacing anything (the browser picks a free name such as `report (1).pdf` first). Modes are kept. Symbolic links inside a folder are copied as links, never followed. A folder cannot be copied into itself (`"cannot copy a folder into itself"`), devices, sockets and pipes are refused, and a folder with more than 100,000 entries is refused before anything is written, so copying `/` by mistake does nothing. If a copy fails half way, what it created is removed.
+- `chmod` sets the permission bits of **one** file or folder, not what is inside it. `mode` is octal, three or four digits (`755`, `0755`), and at most `0777`: setuid, setgid and sticky bits are refused with `"mode must be at most 0777"`, like in a file send. An empty `mode` is refused too.
+- `read` is a read (a read-only session may use it, to *view*): it returns `text` and a `version`, for the editor. Only a regular file of at most 512 KB (`MaxEditBytes`) that is valid UTF-8 and holds no NUL byte: anything else is refused (`"this is not a text file (it has binary data in it)"`, `"the file is too big to edit here (the limit is 512 KB): download it instead"`, `"is a directory"`). `version` changes whenever the file is written (it is made from the modification time and the size).
+- `write` replaces the text of an existing file and needs the `version` that `read` returned. If the file is not at that version any more, it is refused with `"the file changed on the host since it was opened: close this window and open it again"` and nothing is written, so a change made on the host in the meantime is never lost. A missing `version` is refused, a path that does not exist is an error (it never creates a file), and `content` is at most 512 KB. The bytes are written into the file itself, not into a new file renamed over it, so the owner, the mode and links stay as they are; the price is that a crash in the middle leaves a half-written file. The answer has the new `version`, so a second save can follow.
+- `props` is a read, so a read-only session may use it: `{"id":8,"ok":true,"props":{…}}` with `name`, `is_dir`, `is_link` (and `link_target`), `mode` (like `-rw-r--r--`), `perm` (octal, like `0644`), `owner` and `group` (names, or numbers when a name cannot be found; left out on a host where there is no owner), `mod_time`, and `size`. For a link it describes the link itself. For a folder, `size` is the total of the files inside, with `files` and `dirs` counted at any depth, links not followed, and folders it cannot read skipped. It stops after 100,000 entries and then has `"truncated":true`: the numbers are what was counted, so the real ones are higher.
 - Errors are the operating system's own short wording ("no such file or directory", "permission denied"), or one of the messages above. An unknown `op` is `"unknown operation"`, and a frame that is not valid JSON gets `{"ok":false,"error":"invalid request"}`. A failed request never ends the session.
 
 ### `download`
 - params: `{"path": "/var/log/syslog"}`
 - Used only internally by `GET /api/hosts/{id}/download`: the **server** plays the browser's part and no browser ever attaches (its id is never sent to one). The agent's first text frame is `{"name":"syslog","size":12345}`. Binary frames with the file contents follow, in chunks of 64 KB, until the agent closes the connection normally (1000).
+- **A folder** is sent as a **zip archive**, built while it is sent (never on the host's disk, and the agent holds one 64 KB chunk of it). The header is `{"name":"project.zip","size":-1}`: a size of `-1` means it is not known until the end, so the server sends the browser no `Content-Length` and the response is chunked. Everything is inside one folder named like the original (so unpacking never spills files), links and special files are not followed or stored, and anything that cannot be read (no permission) is left out and named in a `SKIPPED.txt` at the top of the archive. A folder with more than 100,000 entries fails. A failure after the first byte is a close with an error code, never a normal one, so the browser sees a failed download and not a short archive that looks complete.
 - If the file cannot be read there is no header frame: the agent closes with code `1011` and the reason in its own words (`"no such file or directory"`, `"permission denied"`, `"is a directory"`, `"not a regular file"`, `"path must be absolute"`). Only regular files are sent, so reading `/dev/zero` cannot run forever.
 
 **The HTTP side:** `GET /api/hosts/{id}/download?path=/var/log/syslog`. It needs the `files_read` permission, which every role in a group has, so a viewer may download.

@@ -43,6 +43,9 @@ func startDownload(t *testing.T, path string) (*websocket.Conn, context.Context)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.CloseNow() })
+	// The server reads agent frames with a big limit (relayReadLimit); the
+	// library's default (32 KB) is smaller than one 64 KB chunk.
+	conn.SetReadLimit(1 << 20)
 	return conn, ctx
 }
 
@@ -119,7 +122,7 @@ func TestDownloadRefusalsCloseWithTheReason(t *testing.T) {
 		name, path, reason string
 	}{
 		{"a missing file", filepath.Join(dir, "missing"), ""}, // the wording is the operating system's
-		{"a directory", dir, "is a directory"},
+		// (A directory is not refused any more: it is sent as a zip, see zip_test.go.)
 		{"a relative path", "some/file", "path must be absolute"},
 	}
 	for _, c := range cases {

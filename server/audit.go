@@ -51,6 +51,9 @@ var auditActions = map[string]string{
 	protocol.OpMkdir:  "file_mkdir",
 	protocol.OpRename: "file_rename",
 	protocol.OpDelete: "file_delete",
+	protocol.OpCopy:   "file_copy",
+	protocol.OpChmod:  "file_chmod",
+	protocol.OpWrite:  "file_write",
 }
 
 // recordFileChange writes the audit line for one change an agent reported from
@@ -76,12 +79,17 @@ func (s *Server) recordFileChange(agentID string, c protocol.FileChange) {
 
 	detail := "path=" + auditText(c.Path)
 	switch c.Op {
-	case protocol.OpRename:
+	case protocol.OpRename, protocol.OpCopy:
 		detail += " -> " + auditText(c.To)
 	case protocol.OpDelete:
 		if c.Recursive {
 			detail += " recursive=true"
 		}
+	case protocol.OpChmod:
+		detail += " mode=" + clip(auditText(c.Mode), 10) // a mode is four characters: more is an agent making things up
+	case protocol.OpWrite:
+		// How much was written, never what: a saved file can hold a password.
+		detail += " size=" + strconv.FormatInt(c.Size, 10)
 	}
 	if !c.OK {
 		detail += " FAILED: " + clip(auditText(c.Error), maxAuditError)

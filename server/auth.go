@@ -364,8 +364,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	// can_upload tells the page whether to show Transfers: only people who may
 	// send files to hosts have anything to do there.
+	// The server's version and start time ride along because the page already
+	// asks for this on every login. It sends the start time, not the uptime, so
+	// the browser can keep counting without asking again.
 	writeJSON(w, http.StatusOK, struct {
 		user
-		CanUpload bool `json:"can_upload"`
-	}{u, canUpload})
+		CanUpload       bool      `json:"can_upload"`
+		ServerVersion   string    `json:"server_version"`
+		ServerStartedAt time.Time `json:"server_started_at"`
+	}{u, canUpload, Version, s.started.UTC()})
 }

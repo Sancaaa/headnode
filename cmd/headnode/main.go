@@ -14,7 +14,7 @@ import (
 )
 
 const usage = `usage:
-  headnode [-addr host:port] [-db path]                     run the server
+  headnode [-addr host:port] [-db path] [-agents dir]       run the server
   headnode token create [-db path]                          create an agent enroll token
   headnode user create -username NAME [-admin] [-db path]   create a dashboard user
                                                             (asks for the password, or reads it from stdin when piped)`
@@ -43,12 +43,14 @@ func serve(args []string) {
 	// over plain HTTP, so only listen on other addresses on a network you trust.
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	dbPath := fs.String("db", "data/headnode.db", "path of the SQLite database")
+	agentDir := fs.String("agents", "dist", "folder with the built agent programs (scripts/build-agents), served at /download")
 	fs.Parse(args)
 
 	db := openDB(*dbPath)
 	defer db.Close()
 
 	srv := server.New(db)
+	srv.UseAgentDir(*agentDir)
 	// Uploaded files live next to the database: data/headnode.db, data/files/.
 	if err := srv.UseFilesDir(filepath.Join(filepath.Dir(*dbPath), "files")); err != nil {
 		log.Fatal(err)
@@ -88,8 +90,13 @@ func tokenCommand(args []string) {
 }
 
 // openDB creates the data directory if needed, then opens the database.
+//
+// The directory holds password hashes, agent secret hashes and uploaded files,
+// so only its owner may enter it (0700). MkdirAll never changes the mode of a
+// directory that already exists: one made by an older version stays 0755 until
+// someone runs chmod 700 on it (roadmap, M6 deploy checklist).
 func openDB(path string) *sql.DB {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		log.Fatal(err)
 	}
 	db, err := server.OpenDB(path)

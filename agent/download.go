@@ -33,6 +33,14 @@ func runDownload(ctx context.Context, conn *websocket.Conn, rawParams json.RawMe
 		return err
 	}
 
+	// A folder is sent as a zip archive. Anything that is not a folder (or cannot
+	// be looked at) takes the single-file path, which also reports the errors.
+	if abs, err := absPath(params.Path); err == nil {
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			return runZipDownload(ctx, conn, abs)
+		}
+	}
+
 	file, size, name, err := openForDownload(params.Path)
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, closeReason(describe(err)))

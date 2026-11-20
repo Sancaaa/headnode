@@ -1,0 +1,6 @@
+# Shell scripts must keep Unix line endings, whatever machine checks them out:
+# a CRLF in a script ("sh: not found", "unexpected end of file") breaks it on Linux.
+# server/install.sh is embedded in the server and sent to new hosts.
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf
+deploy/*.service text eol=lf

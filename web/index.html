@@ -19,7 +19,14 @@
 <div class="app">
 
   <aside class="sidebar">
-    <div class="org"><div class="org-mark">HN</div>headnode</div>
+    <div class="org">
+      <div class="org-mark">HN</div>
+      <div class="org-text">
+        <div>headnode</div>
+        <!-- app.js fills in "0.1.0 · up 3h 12m" -->
+        <div class="org-version sub" id="server-line"></div>
+      </div>
+    </div>
     <!-- app.js fills in the links: Admin pages only show for administrators -->
     <nav class="nav" id="nav"></nav>
     <div class="userbox" id="userbox"></div>

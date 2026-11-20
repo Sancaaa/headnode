@@ -15,7 +15,9 @@ import (
 
 const usage = `usage:
   headnode-agent enroll -server URL -token TOKEN [-config agent.json]
-  headnode-agent run [-config agent.json]`
+  headnode-agent run [-config agent.json]
+  headnode-agent service install [-config /etc/headnode/agent.json]   start at boot (systemd, needs root)
+  headnode-agent service uninstall                                     remove that service`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -27,6 +29,8 @@ func main() {
 		enrollCommand(os.Args[2:])
 	case "run":
 		runCommand(os.Args[2:])
+	case "service":
+		serviceCommand(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -48,6 +52,35 @@ func enrollCommand(args []string) {
 		log.Fatal(err)
 	}
 	fmt.Println("enrolled, credentials saved to", *config)
+}
+
+// serviceCommand installs or removes the systemd service (M6). The credentials
+// file has an absolute default path here, unlike the other commands: a service
+// does not start in the folder the person was in.
+func serviceCommand(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("service "+args[0], flag.ExitOnError)
+	config := fs.String("config", "/etc/headnode/agent.json", "credentials file written by enroll")
+	fs.Parse(args[1:])
+
+	switch args[0] {
+	case "install":
+		if err := agent.InstallService(*config); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("headnode-agent is installed as a service and running. Logs: journalctl -u headnode-agent -f")
+	case "uninstall":
+		if err := agent.UninstallService(); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("the headnode-agent service is removed. The program and", *config, "were left in place.")
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
 }
 
 func runCommand(args []string) {

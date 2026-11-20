@@ -52,6 +52,7 @@ type transfer struct {
 	size     int64
 	destPath string
 	mode     string
+	extract  bool // the file is a zip to unpack into destPath (a whole folder is being sent)
 	created  time.Time
 	hosts    []*transferHost
 }
@@ -171,6 +172,33 @@ func (t *transferTable) hasPending(agentID, fileID string) bool {
 	return false
 }
 
+// transferStuckAfter is how long a transfer may stay unanswered and still count
+// as "in use". A host that never answers (an old agent that ignores `fetch`, or
+// one that hung) would otherwise keep its file from being deleted for good,
+// because a pending status only ends when the host answers or disconnects.
+const transferStuckAfter = time.Hour
+
+// filesInUse is the set of uploaded files that some transfer is still waiting
+// on: at least one of its hosts has not answered yet. Such a file must not be
+// deleted, or that host's fetch would fail half way (D-38).
+func (t *transferTable) filesInUse() map[string]bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	inUse := map[string]bool{}
+	for _, tr := range t.byID {
+		if time.Since(tr.created) > transferStuckAfter {
+			continue
+		}
+		for _, h := range tr.hosts {
+			if h.status == transferPending {
+				inUse[tr.fileID] = true
+				break
+			}
+		}
+	}
+	return inUse
+}
+
 // ------------------------------------------------------------------ HTTP
 
 type transferHostView struct {
@@ -186,6 +214,7 @@ type transferView struct {
 	FileSize  int64              `json:"file_size"`
 	DestPath  string             `json:"dest_path"`
 	Mode      string             `json:"mode"`
+	Extract   bool               `json:"extract"` // dest_path is a folder the file was unpacked into
 	StartedBy string             `json:"started_by"`
 	CreatedAt time.Time          `json:"created_at"`
 	Hosts     []transferHostView `json:"hosts"`
@@ -214,7 +243,7 @@ func (s *Server) hostNames() (map[string]string, error) {
 // newTransferView builds what the API returns for a transfer.
 func newTransferView(tr transfer, hosts []transferHost, names map[string]string) transferView {
 	view := transferView{
-		ID: tr.id, FileName: tr.fileName, FileSize: tr.size, DestPath: tr.destPath, Mode: tr.mode,
+		ID: tr.id, FileName: tr.fileName, FileSize: tr.size, DestPath: tr.destPath, Mode: tr.mode, Extract: tr.extract,
 		StartedBy: tr.userName, CreatedAt: tr.created.UTC(), Hosts: make([]transferHostView, 0, len(hosts)),
 	}
 	for _, h := range hosts {
@@ -272,6 +301,7 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		AgentIDs []string `json:"agent_ids"`
 		DestPath string   `json:"dest_path"`
 		Mode     string   `json:"mode"`
+		Extract  bool     `json:"extract"`
 	}
 	if !readJSONLimit(w, r, &req, 64<<10) {
 		return
@@ -295,12 +325,18 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := req.Mode
-	if mode == "" {
-		mode = "0644"
-	}
-	if !modeRe.MatchString(mode) {
-		writeError(w, http.StatusBadRequest, "mode must be three octal digits, like 0644 or 0755")
-		return
+	if req.Extract {
+		// An unpacked folder keeps the modes its files had: a single mode for all of
+		// them has no meaning, so none is taken.
+		mode = ""
+	} else {
+		if mode == "" {
+			mode = "0644"
+		}
+		if !modeRe.MatchString(mode) {
+			writeError(w, http.StatusBadRequest, "mode must be three octal digits, like 0644 or 0755")
+			return
+		}
 	}
 
 	// Every target must be a host the user may write to. This comes first: it is
@@ -328,6 +364,12 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "look up file", err)
 		return
 	}
+	// Only an archive can be unpacked. This is a sanity check (the agent refuses
+	// anything that is not a zip anyway), so the person gets the reason at once.
+	if req.Extract && !strings.HasSuffix(strings.ToLower(file.name), ".zip") {
+		writeError(w, http.StatusBadRequest, "only a .zip file can be unpacked")
+		return
+	}
 
 	idSuffix, err := randomHex(8)
 	if err != nil {
@@ -336,14 +378,18 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	tr := &transfer{
 		id: "t_" + idSuffix, userID: u.ID, userName: u.Username, fileID: req.FileID,
-		fileName: file.name, size: file.size, destPath: req.DestPath, mode: mode, created: time.Now(),
+		fileName: file.name, size: file.size, destPath: req.DestPath, mode: mode, extract: req.Extract, created: time.Now(),
 	}
 	for _, id := range agentIDs {
 		tr.hosts = append(tr.hosts, &transferHost{agentID: id, status: transferPending})
 	}
 	s.transfers.add(tr)
-	s.audit(u.ID, "", "transfer_start", fmt.Sprintf("file=%s sha256=%.12s dest=%s hosts=%d",
-		auditText(file.name), file.sha256, auditText(req.DestPath), len(agentIDs)))
+	unpack := ""
+	if req.Extract {
+		unpack = " unpack=yes"
+	}
+	s.audit(u.ID, "", "transfer_start", fmt.Sprintf("file=%s sha256=%.12s dest=%s hosts=%d%s",
+		auditText(file.name), file.sha256, auditText(req.DestPath), len(agentIDs), unpack))
 	slog.Info("transfer started", "transfer", tr.id, "file", file.name, "size", file.size,
 		"dest", req.DestPath, "hosts", len(agentIDs), "user", u.Username)
 
@@ -351,7 +397,7 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 	// fails at once, and the others go ahead (D-03: the server does not queue).
 	command := protocol.Fetch{
 		TransferID: tr.id, FileID: req.FileID, DestPath: req.DestPath, Mode: mode,
-		SHA256: file.sha256, Size: file.size,
+		SHA256: file.sha256, Size: file.size, Extract: req.Extract,
 	}
 	for _, id := range agentIDs {
 		err := s.agents.send(id, protocol.TypeFetch, command)

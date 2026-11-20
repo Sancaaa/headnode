@@ -33,11 +33,58 @@ func changeRows(t *testing.T, s *Server) []auditRow {
 	t.Helper()
 	var out []auditRow
 	for _, r := range auditRows(t, s.db) {
-		if r.Action == "file_mkdir" || r.Action == "file_rename" || r.Action == "file_delete" {
+		if r.Action == "file_mkdir" || r.Action == "file_rename" || r.Action == "file_delete" ||
+			r.Action == "file_copy" || r.Action == "file_chmod" || r.Action == "file_write" {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// The two operations added with the file manager polish report like the others.
+func TestCopyAndChmodReportsAreAudited(t *testing.T) {
+	w := newPermWorld(t)
+	web := w.hosts["web-01"]
+	control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+	id := openFilesSessionFor(t, w, "alice", "web-01", control)
+
+	reportChange(t, control, protocol.FileChange{SessionID: id, Op: protocol.OpCopy, Path: "/etc/app", To: "/tmp/app (1)", OK: true})
+	reportChange(t, control, protocol.FileChange{SessionID: id, Op: protocol.OpChmod, Path: "/opt/run.sh", Mode: "0755", OK: true})
+	reportChange(t, control, protocol.FileChange{SessionID: id, Op: protocol.OpChmod, Path: "/etc/passwd", Mode: "0777", OK: false, Error: "operation not permitted"})
+
+	rows := waitForChangeRows(t, w.s, 3)
+	want := []struct{ action, detail string }{
+		{"file_copy", "path=/etc/app -> /tmp/app (1)"},
+		{"file_chmod", "path=/opt/run.sh mode=0755"},
+		{"file_chmod", "path=/etc/passwd mode=0777 FAILED: operation not permitted"},
+	}
+	for i, r := range rows {
+		if r.Action != want[i].action || r.Detail != want[i].detail {
+			t.Errorf("row %d = %s %q, want %s %q", i, r.Action, r.Detail, want[i].action, want[i].detail)
+		}
+	}
+}
+
+// A saved file is audited by its size, and the audit has no way to carry the text.
+func TestWriteReportIsAuditedBySizeOnly(t *testing.T) {
+	w := newPermWorld(t)
+	web := w.hosts["web-01"]
+	control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+	id := openFilesSessionFor(t, w, "alice", "web-01", control)
+
+	reportChange(t, control, protocol.FileChange{SessionID: id, Op: protocol.OpWrite, Path: "/etc/app.conf", Size: 120, OK: true})
+	reportChange(t, control, protocol.FileChange{SessionID: id, Op: protocol.OpWrite, Path: "/etc/app.conf", Size: 9, OK: false, Error: "the file changed on the host since it was opened"})
+
+	rows := waitForChangeRows(t, w.s, 2)
+	want := []string{
+		"path=/etc/app.conf size=120",
+		"path=/etc/app.conf size=9 FAILED: the file changed on the host since it was opened",
+	}
+	for i, r := range rows {
+		if r.Action != "file_write" || r.Detail != want[i] {
+			t.Errorf("row %d = %s %q, want file_write %q", i, r.Action, r.Detail, want[i])
+		}
+	}
 }
 
 func waitForChangeRows(t *testing.T, s *Server, n int) []auditRow {

@@ -98,7 +98,10 @@ So uploading to 1 host and to 50 hosts uses the **same** code path.
      curl -fsSL https://headnode.example.com/install.sh | sh -s -- --token <TOKEN>
 3. The agent calls POST /agent/enroll {token, hostname, os}
    → the server replies {agent_id, agent_secret} (the secret is sent ONCE)
-4. The agent saves both to agent.json (permission 0600) and installs itself as a service.
+4. The agent saves both to /etc/headnode/agent.json (permission 0600) and installs itself as a systemd service
+   (`headnode-agent service install`). The script is served by the headnode server itself (`GET /install.sh`),
+   and so is the agent program (`GET /download/headnode-agent-linux-<arch>`, D-40, D-46): the host needs nothing
+   but `curl`, root and systemd. How to run the server on a VPS: docs/deploy.md.
 5. Every later connection sends the header  Authorization: Bearer <agent_id>.<agent_secret>
 ```
 
@@ -153,6 +156,7 @@ Limitation **accepted** for now: the agent usually runs as root/SYSTEM. Anyone a
 ```
 cmd/headnode/main.go        flags + start the server
 cmd/headnode-agent/main.go  subcommands: run | enroll | service install/uninstall
+scripts/build-agents.*      cross-compile the agent into dist/, which the server serves at /download (D-40)
 cmd/hnctl/                  main.go (commands), config.go (saved login), client.go (API calls), forward.go (tunnels)
 server/                     one package, split by FILE:
   http.go                   routing + login/origin middleware

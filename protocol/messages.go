@@ -47,15 +47,18 @@ const TypeFileChange = "file_change"
 // and never WHO did it: the server finds the person from SessionID, because it
 // created that session for them. Reads (list, stat, home) are not reported.
 //
-// Op is mkdir, rename or delete. Path is the path acted on (for a rename, the
-// old one). To is the new path, for a rename only. Recursive is for a delete
-// only. Error is short text, only when OK is false.
+// Op is mkdir, rename, copy, chmod, write or delete. Path is the path acted on
+// (for a rename or a copy, the old one). To is the new path, for a rename or a
+// copy only. Recursive is for a delete only. Mode is for a chmod only. Size is
+// for a write only. Error is short text, only when OK is false.
 type FileChange struct {
 	SessionID string `json:"session_id"`
 	Op        string `json:"op"`
 	Path      string `json:"path"`
 	To        string `json:"to,omitempty"`
 	Recursive bool   `json:"recursive,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Size      int64  `json:"size,omitempty"` // write only: how many bytes were written
 	OK        bool   `json:"ok"`
 	Error     string `json:"error,omitempty"`
 }
@@ -71,6 +74,11 @@ const (
 // DestPath. SHA256 and Size are what the server stored when the file was
 // uploaded: the agent checks what it received against them before the file
 // appears at DestPath.
+//
+// With Extract the file is a zip archive and DestPath is an existing folder:
+// the agent unpacks the archive into it instead of saving the zip itself. That
+// is how a whole folder is sent (the file manager zips it). Mode is not used
+// then: every file keeps the mode it had in the archive.
 type Fetch struct {
 	TransferID string `json:"transfer_id"`
 	FileID     string `json:"file_id"`
@@ -78,6 +86,7 @@ type Fetch struct {
 	Mode       string `json:"mode"` // octal, for example "0755"
 	SHA256     string `json:"sha256"`
 	Size       int64  `json:"size"`
+	Extract    bool   `json:"extract,omitempty"`
 }
 
 // FetchResult is the agent's answer to Fetch. Error is empty when OK is true.
@@ -174,7 +183,16 @@ const (
 	OpMkdir  = "mkdir"
 	OpRename = "rename"
 	OpDelete = "delete"
+	OpCopy   = "copy"  // a file, or a folder with everything in it
+	OpChmod  = "chmod" // the permission bits of one file or folder
+	OpProps  = "props" // size, mode, owner...: a read, like stat, but a folder's size is added up
+	OpRead   = "read"  // the text of a small file, for the editor
+	OpWrite  = "write" // replace the text of a small file, if it has not changed since it was read
 )
+
+// MaxEditBytes is the biggest file the editor opens or saves. It keeps one
+// request well under the relay's message limit, even after JSON escaping.
+const MaxEditBytes = 512 * 1024
 
 // FileRequest is one request. Which fields are used depends on Op.
 type FileRequest struct {
@@ -184,6 +202,30 @@ type FileRequest struct {
 	From      string `json:"from,omitempty"`
 	To        string `json:"to,omitempty"`
 	Recursive bool   `json:"recursive,omitempty"`
+	Mode      string `json:"mode,omitempty"` // chmod: octal, for example "0755"
+	Content   string `json:"content"`        // write: the new text of the file
+	Version   string `json:"version,omitempty"` // write: the version that `read` returned
+}
+
+// FileProps is the answer to `props`: what the file manager's "Properties"
+// window shows.
+type FileProps struct {
+	Name       string    `json:"name"`
+	IsDir      bool      `json:"is_dir"`
+	IsLink     bool      `json:"is_link"`
+	LinkTarget string    `json:"link_target,omitempty"`
+	Mode       string    `json:"mode"` // like "-rw-r--r--"
+	Perm       string    `json:"perm"` // the permission bits in octal, like "0644"
+	Owner      string    `json:"owner,omitempty"`
+	Group      string    `json:"group,omitempty"`
+	ModTime    time.Time `json:"mod_time"`
+	// Size is a file's own size. For a folder it is the total of the files inside.
+	Size  int64 `json:"size"`
+	Files int   `json:"files,omitempty"` // a folder: how many files (and links) are inside, at any depth
+	Dirs  int   `json:"dirs,omitempty"`  // a folder: how many folders are inside, at any depth
+	// Truncated means the folder was too big to count fully: Size, Files and Dirs
+	// are what was found before the limit, so the real numbers are higher.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // FileEntry describes one file, directory or link.
@@ -206,6 +248,9 @@ type FileResponse struct {
 	Entries   []FileEntry `json:"entries,omitempty"`   // list
 	Truncated bool        `json:"truncated,omitempty"` // list: the directory has more entries than were sent
 	Entry     *FileEntry  `json:"entry,omitempty"`     // stat
+	Props     *FileProps  `json:"props,omitempty"`     // props
+	Text      string      `json:"text,omitempty"`      // read
+	Version   string      `json:"version,omitempty"`   // read, write: changes whenever the file does
 	Path      string      `json:"path,omitempty"`      // home
 }
 

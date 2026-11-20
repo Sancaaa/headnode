@@ -92,7 +92,14 @@ func fetchFile(ctx context.Context, cfg Config, cmd protocol.Fetch) error {
 	// two transfers at once, or an earlier attempt that was killed half way.
 	// CreateTemp makes it 0600: a file that is half there, and may be a secret or
 	// a program, is not readable by everyone.
-	file, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".*.part")
+	//
+	// For an archive to unpack, dest is the folder the contents go into, so the
+	// temporary file lives inside it.
+	tempDir, tempName := filepath.Dir(dest), filepath.Base(dest)+".*.part"
+	if cmd.Extract {
+		tempDir, tempName = dest, ".headnode-archive-*.part"
+	}
+	file, err := os.CreateTemp(tempDir, tempName)
 	if err != nil {
 		return err
 	}
@@ -124,6 +131,11 @@ func fetchFile(ctx context.Context, cfg Config, cmd protocol.Fetch) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if cmd.Extract {
+		// The archive itself is not kept: the deferred cleanup removes it, whether
+		// or not unpacking worked.
+		return extractZip(part, dest)
 	}
 	if err := os.Chmod(part, mode); err != nil {
 		return err

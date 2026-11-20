@@ -11,10 +11,17 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"headnode/protocol"
 	"headnode/web"
 )
+
+// Version is the server's own version, shown at the bottom of the sidebar (it
+// comes to the page in /api/me). The agent keeps its version the same way, in
+// one constant (agent.Version). Change it here when a release is cut.
+const Version = "0.1.0"
 
 // Server holds what the HTTP handlers share. It is a plain struct, not an
 // interface: handlers are methods so they can reach s.db without globals.
@@ -25,6 +32,14 @@ type Server struct {
 	transfers  *transferTable // file sends in progress or recently finished (D-03)
 	loginLimit *loginLimiter  // slows down password guessing
 	filesDir   string         // where uploaded files are stored; "" = uploads are off
+	agentDir   string         // where the built agent programs are; "" = /download is off
+	started    time.Time      // when this server started: the page works out the uptime
+
+	// blobMu makes "store a blob and record its row" and "delete a row and maybe
+	// its blob" run one at a time. Without it, a delete could remove a blob in
+	// the instant between an upload noticing it already exists and recording
+	// the row that points to it (D-38).
+	blobMu sync.Mutex
 }
 
 func New(db *sql.DB) *Server {
@@ -34,6 +49,7 @@ func New(db *sql.DB) *Server {
 		sessions:   newSessionTable(sessionPairTimeout),
 		transfers:  newTransferTable(),
 		loginLimit: newLoginLimiter(),
+		started:    time.Now(),
 	}
 }
 
@@ -76,9 +92,15 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/hosts/{id}/sessions", s.handleOpenSession)
 	// Any role with files_read may download: handleDownload checks that.
 	api.HandleFunc("GET /api/hosts/{id}/download", s.handleDownload)
+	// "Send to hosts" in the file manager: copy a file from a host to the server's
+	// uploads. Reading the file and storing an upload are both checked in the handler.
+	api.HandleFunc("POST /api/hosts/{id}/pull", s.handlePullFile)
 	// Uploading and sending files need the files_write permission (on the target
 	// hosts for a send, on any group for an upload): the handlers check it.
 	api.HandleFunc("POST /api/files", s.handleUpload)
+	// Looking at every upload and deleting one are admin matters (D-38).
+	api.HandleFunc("GET /api/files", s.adminOnly(s.handleListFiles))
+	api.HandleFunc("DELETE /api/files/{id}", s.adminOnly(s.handleDeleteFile))
 	api.HandleFunc("POST /api/transfers", s.handleCreateTransfer)
 	api.HandleFunc("GET /api/transfers", s.handleListTransfers)
 	api.HandleFunc("GET /api/transfers/{id}", s.handleGetTransfer)
@@ -97,6 +119,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agent/connect", s.handleAgentConnect)
 	mux.HandleFunc("GET /agent/sessions/{id}", s.handleAgentSession)
 	mux.HandleFunc("GET /agent/files/{id}", s.handleAgentFile)
+	// The agent program, for the install command. Public on purpose (see the handler).
+	mux.HandleFunc("GET /download/{name}", s.handleAgentBinary)
+	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	// The browser's WebSocket for a session. It is not under /api/, so it gets
 	// the login wrapper by hand. handleUISession adds the Origin check.

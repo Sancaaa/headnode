@@ -20,6 +20,13 @@ import (
 // a test can lower it.
 var listLimit = 2000
 
+// walkLimit caps how many entries one folder-size count or one folder copy looks
+// at. Walking a whole disk to answer "how big is /?" would keep the file manager
+// waiting for minutes, and copying that many entries by accident would fill the
+// disk. Past the limit a size is reported as partial and a copy is refused. A
+// variable so a test can lower it.
+var walkLimit = 100000
+
 // The answers a person is meant to read. Anything else is described by the
 // operating system's own error, see describe.
 var (
@@ -29,6 +36,8 @@ var (
 	errExists      = errors.New("destination already exists")
 	errDirExists   = errors.New("a folder with that name already exists")
 	errFileExists  = errors.New("a file with that name already exists")
+	errIntoItself  = errors.New("cannot copy a folder into itself")
+	errSpecial     = errors.New("cannot copy a special file (a device, socket or pipe)")
 	errRoot        = errors.New("refusing to delete the root directory")
 )
 
@@ -48,7 +57,9 @@ func runFiles(ctx context.Context, conn *websocket.Conn, rawParams json.RawMessa
 			return err
 		}
 	}
-	conn.SetReadLimit(1 << 20)
+	// A save carries a whole small file (protocol.MaxEditBytes) as JSON text, which
+	// can be several times bigger once it is escaped.
+	conn.SetReadLimit(4 << 20)
 	slog.Info("file session started", "readonly", params.ReadOnly)
 
 	for {
@@ -107,7 +118,7 @@ func reportChange(report func(protocol.FileChange), req protocol.FileRequest, er
 		return
 	}
 	switch req.Op {
-	case protocol.OpMkdir, protocol.OpRename, protocol.OpDelete:
+	case protocol.OpMkdir, protocol.OpRename, protocol.OpDelete, protocol.OpCopy, protocol.OpChmod, protocol.OpWrite:
 	default:
 		return
 	}
@@ -117,10 +128,14 @@ func reportChange(report func(protocol.FileChange), req protocol.FileRequest, er
 
 	change := protocol.FileChange{Op: req.Op, Path: req.Path, OK: err == nil}
 	switch req.Op {
-	case protocol.OpRename:
+	case protocol.OpRename, protocol.OpCopy:
 		change.Path, change.To = req.From, req.To
 	case protocol.OpDelete:
 		change.Recursive = req.Recursive
+	case protocol.OpChmod:
+		change.Mode = req.Mode
+	case protocol.OpWrite:
+		change.Size = int64(len(req.Content)) // what was asked for: never the text itself
 	}
 	if err != nil {
 		change.Error = describe(err)
@@ -136,7 +151,11 @@ func doFileOp(req protocol.FileRequest, readOnly bool) (protocol.FileResponse, e
 		return listDir(req.Path)
 	case protocol.OpStat:
 		return statPath(req.Path)
-	case protocol.OpMkdir, protocol.OpRename, protocol.OpDelete:
+	case protocol.OpProps:
+		return propsOf(req.Path)
+	case protocol.OpRead:
+		return readText(req.Path)
+	case protocol.OpMkdir, protocol.OpRename, protocol.OpDelete, protocol.OpCopy, protocol.OpChmod, protocol.OpWrite:
 		// The server decided at session start what this user may do and told us
 		// (D-27). A read-only session never changes anything on the disk.
 		if readOnly {
@@ -147,6 +166,12 @@ func doFileOp(req protocol.FileRequest, readOnly bool) (protocol.FileResponse, e
 			return protocol.FileResponse{}, makeDir(req.Path)
 		case protocol.OpRename:
 			return protocol.FileResponse{}, renamePath(req.From, req.To)
+		case protocol.OpCopy:
+			return protocol.FileResponse{}, copyPath(req.From, req.To)
+		case protocol.OpChmod:
+			return protocol.FileResponse{}, chmodPath(req.Path, req.Mode)
+		case protocol.OpWrite:
+			return writeText(req.Path, req.Content, req.Version)
 		default:
 			return protocol.FileResponse{}, deletePath(req.Path, req.Recursive)
 		}

@@ -374,9 +374,11 @@ func (s *Server) handleCreateEnrollToken(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(currentUser(r).ID, "", "token_create", "group="+groupLabel(groupName))
 
-	// The agent installer script arrives in M6. Until then the command to show
-	// is the manual one. The field keeps its name so the UI does not change.
-	command := fmt.Sprintf("headnode-agent enroll -server %s -token %s && headnode-agent run", serverURL(r), token)
+	// One command, run on the new host: it downloads the installer from this
+	// server, which downloads the agent, enrolls with this token and installs a
+	// service (M6). The token is on the command line, so it is visible to other
+	// users of that host while the command runs; it expires in 24 hours.
+	command := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- --token %s", serverURL(r), token)
 
 	w.Header().Set("Cache-Control", "no-store") // the reply holds a secret
 	writeJSON(w, http.StatusCreated, map[string]any{
