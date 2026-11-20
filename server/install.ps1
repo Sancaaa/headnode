@@ -183,4 +183,4 @@ if ($NoVnc) {
 }
 
 Write-Host ''
-Write-Host 'Done. The host appears in the dashboard within a few seconds. Its screen is off until you press Start VNC there.'
+Write-Host 'Done. The host appears in the dashboard within a few seconds.'

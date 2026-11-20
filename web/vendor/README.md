@@ -33,10 +33,15 @@ the library is missing.
 ## noVNC (the Screen page)
 
 noVNC is published as plain ES modules, which a browser loads as they are, so it
-is vendored as the package's own `core/` and `vendor/` folders, unmodified: no
-bundler, nothing built. This downloads the pinned release from the npm registry
-and copies those folders (Windows 10 and later have `tar`; no Node.js needed).
-Run it from the project root in PowerShell:
+is used as the package's own `core/` and `vendor/` folders, unmodified: no
+bundler, nothing built.
+
+**On the server you do nothing:** `sudo sh start.sh` downloads the pinned release
+into `web/vendor/novnc/` before it builds (D-52). The folder is not in git.
+
+**On your own computer**, only to run the server locally with the Screen page, run
+this from the project root in PowerShell. It downloads the same release from the npm
+registry and copies those folders (Windows 10 and later have `tar`; no Node.js needed):
 
 ```powershell
 $t = Join-Path $env:TEMP "novnc"

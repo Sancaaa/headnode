@@ -16,10 +16,11 @@ sudo sh start.sh
 `start.sh` does, in this order, and says what it is doing:
 
 1. installs Go if the machine has none (it only needs a small starter Go: the project's own exact version is then downloaded by Go itself),
-2. builds the server and the agent programs (Linux amd64 and arm64),
-3. puts them in `/opt/headnode/` (owned by root, readable by everyone),
-4. creates a system user `headnode` and the private data folder `/var/lib/headnode` (mode `0700`),
-5. installs and starts the `headnode` service.
+2. downloads the noVNC screen viewer (a pinned release from the npm registry, into `web/vendor/novnc/`, which git ignores; D-52) if it is not there yet,
+3. builds the server and the agent programs (Linux amd64 and arm64),
+4. puts them in `/opt/headnode/` (owned by root, readable by everyone),
+5. creates a system user `headnode` and the private data folder `/var/lib/headnode` (mode `0700`),
+6. installs and starts the `headnode` service.
 
 When it ends it says "headnode is running on 127.0.0.1:8080". The server listens on that local address only, so nothing from outside can reach it yet.
 

@@ -102,7 +102,7 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 **Done when:** a Windows host is added with one command and shows *online* with CPU/RAM/disk. `hnctl forward 5900:<host>:127.0.0.1:5900` plus a VNC viewer on the laptop controls its screen, including the login screen. On a Windows Pro host, `hnctl forward 3389:<host>:127.0.0.1:3389` plus `mstsc` opens RDP.
 
 ## M8 — VNC in the browser (B4)
-- [ ] noVNC vendored (like xterm.js), with a decisions entry (D-49)
+- [ ] noVNC added, with a decisions entry (D-49); the server downloads it itself in `start.sh` (D-52)
 - [ ] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
 - [ ] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
 - [ ] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)

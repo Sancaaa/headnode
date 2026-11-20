@@ -9,6 +9,10 @@
 *.db-wal
 *.db-shm
 
+# the screen viewer library: start.sh downloads it on the server (D-52), and
+# web/vendor/README.md has the command for a local copy
+/web/vendor/novnc/
+
 # agent config written by enroll (contains the secret)
 agent.json
 

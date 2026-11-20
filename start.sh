@@ -80,12 +80,42 @@ ensure_go() {
     say "Using $(go version)"
 }
 
+# ----------------------------------------------------------- noVNC
+
+# The Screen page's viewer library (D-49, D-52). It is not kept in git: the server
+# fetches this exact release itself, the first time and whenever NOVNC_VERSION
+# changes, before it builds (the web files are compiled into the program).
+NOVNC_VERSION=1.5.0
+NOVNC_DIR=web/vendor/novnc
+
+ensure_novnc() {
+    if [ -f "$NOVNC_DIR/core/rfb.js" ] && [ "$(cat "$NOVNC_DIR/VERSION" 2>/dev/null)" = "$NOVNC_VERSION" ]; then
+        return 0
+    fi
+    command -v curl >/dev/null 2>&1 || die "curl is needed to download noVNC: apt-get install -y curl"
+    command -v tar >/dev/null 2>&1 || die "tar is needed to unpack noVNC: apt-get install -y tar"
+    say "Downloading the noVNC screen viewer $NOVNC_VERSION..."
+    tmp=$(mktemp -d) || die "cannot make a temporary folder"
+    # npm releases never change once published, so a pinned version is the same
+    # files every time. Unpacked in its own new folder: the download is not trusted.
+    curl -fsSL "https://registry.npmjs.org/@novnc/novnc/-/novnc-$NOVNC_VERSION.tgz" -o "$tmp/novnc.tgz" || { rm -rf "$tmp"; die "could not download noVNC"; }
+    tar -xzf "$tmp/novnc.tgz" -C "$tmp" || { rm -rf "$tmp"; die "could not unpack noVNC"; }
+    [ -f "$tmp/package/core/rfb.js" ] && [ -d "$tmp/package/vendor" ] || { rm -rf "$tmp"; die "the noVNC download does not look right (no core/rfb.js)"; }
+    rm -rf "$NOVNC_DIR"
+    mkdir -p "$NOVNC_DIR" || die "cannot create $NOVNC_DIR"
+    cp -R "$tmp/package/core" "$tmp/package/vendor" "$NOVNC_DIR/" || { rm -rf "$tmp"; die "could not copy noVNC into place"; }
+    cp "$tmp"/package/LICENSE* "$tmp/package/AUTHORS" "$NOVNC_DIR/" 2>/dev/null || true
+    printf '%s\n' "$NOVNC_VERSION" > "$NOVNC_DIR/VERSION"
+    rm -rf "$tmp"
+}
+
 # ----------------------------------------------------------- install
 
 install_all() {
     need_root
     command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || die "systemd was not found: this script installs a systemd service"
     ensure_go
+    ensure_novnc
 
     # No C compiler needed: the database driver is pure Go.
     CGO_ENABLED=0
