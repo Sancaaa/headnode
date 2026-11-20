@@ -883,53 +883,6 @@ function renderScreenPage(host) {
   return page;
 }
 
-// TightVNC announces its own "Tight" login type (security type 16) to any viewer
-// that speaks RFB 3.7 or 3.8, and offers nothing else. noVNC takes it, cannot
-// complete it with TightVNC ("No supported sub-auth types!"), and gives up, although
-// TightVNC does the plain VNC password too. RFB 3.3, the oldest version, has no
-// negotiation: the server just names the one login type it wants (the plain
-// password, or none). So this wraps the WebSocket and changes the server's version
-// banner "RFB 003.008" to "RFB 003.003" (D-53). noVNC, which supports 3.3, then
-// answers with 3.3, and the server follows suit. noVNC itself stays unmodified.
-//
-// Only the first 12 bytes the server sends are touched: the version banner. Everything
-// after it, and everything the browser sends, passes through unchanged.
-function useOldestRfb(ws) {
-  let first = true;
-
-  // A Proxy forwards everything to the real socket, except that the function noVNC
-  // installs to receive messages sees the changed banner.
-  return new Proxy(ws, {
-    get(target, prop) {
-      const value = target[prop];
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-    set(target, prop, value) {
-      if (prop === 'onmessage' && typeof value === 'function') {
-        target.onmessage = (event) => {
-          if (first && event.data instanceof ArrayBuffer) {
-            first = false;
-            const bytes = new Uint8Array(event.data);
-            const banner = new TextDecoder().decode(bytes.subarray(0, 12));
-            // "RFB 003.008\n", "RFB 003.007\n", or a newer major version. A repeater's
-            // "RFB 000.000" and anything unexpected are left alone.
-            if (bytes.length >= 12 && /^RFB 00[3-9]\.\d{3}\n$/.test(banner) && banner !== 'RFB 003.003\n') {
-              const changed = bytes.slice(); // a copy: the original buffer belongs to the browser
-              changed.set(new TextEncoder().encode('RFB 003.003\n'));
-              value({ data: changed.buffer });
-              return;
-            }
-          }
-          value(event);
-        };
-      } else {
-        target[prop] = value;
-      }
-      return true;
-    },
-  });
-}
-
 // Asks for the VNC password (the VNC server's own, not a headnode one). It goes to
 // the server for this connection only, and is never stored. Resolves with the
 // password, or null if the person cancelled.
@@ -1010,7 +963,7 @@ async function mountScreen(host, box, status, cad, toggle, power) {
     // Added before noVNC attaches its own handlers, so this runs first and the
     // reason is known by the time noVNC reports the disconnect.
     ws.addEventListener('close', (event) => { closeReason = plain(event.reason); });
-    rfb = new RFB(box, useOldestRfb(ws), {});
+    rfb = new RFB(box, ws, {});
     rfb.scaleViewport = true;   // the whole screen, scaled to the window
     rfb.resizeSession = false;  // never change the host's own resolution
     rfb.background = '#111010';
@@ -1061,9 +1014,11 @@ async function mountScreen(host, box, status, cad, toggle, power) {
       status.textContent = 'Disconnected: ' + reason;
     } else if (!everConnected) {
       // The tunnel worked (the VNC server accepted it) but the screen never appeared:
-      // the server hung up during the handshake, or a password was not given.
-      status.textContent = 'The VNC server closed the connection before the screen appeared. ' +
-        'Try Reconnect; if it keeps happening, see the VNC server\'s own log on the host.';
+      // the viewer could not log in, or a password was not given. The usual cause is
+      // TightVNC 4, whose login (SRP) no browser viewer speaks (D-53).
+      status.textContent = 'The viewer could not log in to the VNC server on this host. ' +
+        'TightVNC 4 cannot be used from the browser: TightVNC 2.8.90 can (see docs/windows.md). ' +
+        'The browser console (F12) has the exact reason.';
     } else {
       status.textContent = clean === false ? 'The connection was lost.' : 'Disconnected.';
     }

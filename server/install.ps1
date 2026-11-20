@@ -21,8 +21,11 @@ param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '')
 $ErrorActionPreference = 'Stop'
 $Server = '__SERVER__'
 # TightVNC is downloaded from its makers, not bundled: it is GPL software, and the
-# download is checked below to be signed by them before it is run.
-$TightVncUrl = 'https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi'
+# download is checked below to be signed by them before it is run. It is the 2.8 line
+# on purpose, not 4.x: TightVNC 4 logs in with SRP, which no browser viewer (noVNC)
+# speaks, while 2.8 offers the plain VNC password too (D-53). 2.8.90 is the newest 2.8
+# on tightvnc.com/download.php; when it is replaced, change this one line.
+$TightVncUrl = 'https://www.tightvnc.com/download/2.8.90/tightvnc-2.8.90-gpl-setup-64bit.msi'
 $TightVncSigner = 'GlavSoft'
 $Dir = Join-Path $env:ProgramFiles 'headnode'
 $Bin = Join-Path $Dir 'headnode-agent.exe'

@@ -37,7 +37,7 @@ If a VNC server already listens on port 5900, the script keeps it as it is and o
 
 Skip this if the install command set up TightVNC (the VNC button is there). Otherwise: headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
 
-**TightVNC** (free, tightvnc.com):
+**TightVNC 2.8.90** (free, tightvnc.com/download.php, the "2.x" download, not 4.x): the browser's Screen page works with TightVNC 2.8 and **not** with TightVNC 4, which logs in with a method (SRP) that no browser viewer speaks (D-53). If you already have 4.x, uninstall it (Settings → Apps), then run the install command from step 1 again: it installs 2.8.90 for you. 4.x still works with `hnctl forward` and TightVNC's own viewer (step 4).
 
 1. Run the installer and choose a *Custom* install. Keep **TightVNC Server** and turn off the Viewer if you do not need it. Tick **Register TightVNC Server as a system service** (so it works at the login screen and after a reboot).
 2. When it asks, set a **remote access password** (and an administrative password). Use a long one.
