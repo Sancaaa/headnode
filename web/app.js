@@ -419,15 +419,55 @@ function screenHref(hostId) {
   return hostLink(hostId) + '/screen';
 }
 
+// Whether the host has a VNC server to show (D-50): the agent looks at
+// 127.0.0.1:5900 and says so in its heartbeat. An offline host has no heartbeat,
+// and an agent older than 0.8.0 does not send the flag, so both read as "no".
+function hasVnc(host) {
+  return Boolean(host.online && host.heartbeat && host.heartbeat.vnc);
+}
+
 // The VNC button on a host's row. A tunnel needs the same role as a shell
-// (can_shell), and the host has to be online. It is offered for every host, not
-// only Windows ones: any machine with a VNC server on 127.0.0.1:5900 works. A host
-// without one answers with a clear message on the page.
+// (can_shell), and the host has to be online. It is offered for any host, not
+// only Windows ones, but only when a VNC server answers on the host: a Linux
+// server without a desktop would otherwise show a button that cannot work.
+//
+// A host whose VNC server is installed but switched off (to save the machine's
+// resources, D-51) gets a Start VNC button here instead.
 function vncButton(host) {
   if (!host.online || !host.can_shell) return null;
+  if (!hasVnc(host)) return canSwitchVnc(host) ? vncSwitch(host, true) : null;
   const link = h('a', { class: 'btn btn-small', href: screenHref(host.id) }, icon(ICON_HOSTS), 'VNC');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
+}
+
+// Whether the agent can start and stop this host's VNC server (D-51): today a
+// TightVNC service on Windows, which install.ps1 sets up.
+function canSwitchVnc(host) {
+  return Boolean(host.online && host.can_shell && host.heartbeat && host.heartbeat.vnc_control);
+}
+
+// The button that starts or stops the VNC server on a host. There is no answer to
+// wait for: the agent changes the service and reports the new state in its next
+// heartbeat, which the Hosts page polls, and the page redraws when it arrives.
+// Until then the button says what is going on.
+function vncSwitch(host, enabled) {
+  const label = enabled ? 'Start VNC' : 'Stop VNC';
+  const b = button(label, 'btn btn-small', async (event) => {
+    event.stopPropagation(); // not also the row's own link
+    b.disabled = true;
+    b.textContent = enabled ? 'Starting…' : 'Stopping…';
+    const result = await api('POST', '/api/hosts/' + host.id + '/vnc', { enabled });
+    if (result.ok) return;
+    b.textContent = 'Failed';
+    b.title = plain(errorText(result));
+    setTimeout(() => {
+      b.disabled = false;
+      b.textContent = label;
+      b.title = '';
+    }, 4000);
+  });
+  return b;
 }
 
 // "CPU 3% / RAM 7% / Disk 5%", with a warning color per value. Offline hosts
@@ -669,15 +709,20 @@ function hostTabs(host, active) {
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
     isWindows(host) ? null : h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
     isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'),
-    h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen'));
+    // Only where a VNC server answers (D-50). The tab of the page you are on
+    // stays, so it does not vanish under you when the server stops.
+    hasVnc(host) || active === 'screen'
+      ? h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen')
+      : null);
 }
 
 // What the Terminal and Files pages say when someone opens them for a Windows
 // host anyway (an old link, or the address typed by hand).
 function windowsNotice(host) {
   return h('div', { class: 'notice' },
-    host.name + ' is a Windows host. It has no terminal or file manager yet: use the Screen tab (a VNC server ' +
-    'on the host, shown here), or hnctl forward 5900:' + host.name + ':127.0.0.1:5900 with a VNC viewer. See docs/windows.md.');
+    host.name + ' is a Windows host. It has no terminal or file manager yet: use the VNC button on the Hosts page ' +
+    '(it appears when a VNC server runs on the host), or hnctl forward 5900:' + host.name + ':127.0.0.1:5900 with a VNC viewer. ' +
+    'See docs/windows.md.');
 }
 
 function renderTerminalPage(host) {
@@ -826,7 +871,10 @@ function renderScreenPage(host) {
   cad.disabled = true; // until connected
   const toggle = button('Disconnect', 'btn btn-small', () => {});
   const box = h('div', { class: 'screen' });
-  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle)), box);
+  // Stop VNC switches the server on the host off, to save its resources; it also
+  // ends this view. Starting it again is the button on the Hosts page.
+  const stop = canSwitchVnc(host) ? vncSwitch(host, false) : null;
+  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, stop)), box);
 
   // Built after the box is on the page: noVNC measures it to scale the screen.
   queueMicrotask(() => mountScreen(host, box, status, cad, toggle));
@@ -2179,6 +2227,8 @@ const AUDIT_LABELS = {
   host_delete: 'Host deleted',
   session_open: 'Session opened',
   session_close: 'Session closed',
+  vnc_on: 'VNC server started',
+  vnc_off: 'VNC server stopped',
   file_download: 'File downloaded',
   file_upload: 'File uploaded',
   upload_delete: 'Upload deleted',

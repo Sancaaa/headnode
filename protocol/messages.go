@@ -325,4 +325,21 @@ type Heartbeat struct {
 	DiskUsed   uint64  `json:"disk_used"`
 	DiskTotal  uint64  `json:"disk_total"`
 	UptimeSec  uint64  `json:"uptime_sec"`
+	// VNC says whether something accepts connections on 127.0.0.1:5900 on the
+	// host, so the dashboard offers the Screen page only where it can work (D-50).
+	// An agent older than 0.8.0 does not send it, which reads as false.
+	VNC bool `json:"vnc"`
+	// VNCControl says that the agent can start and stop the host's VNC server
+	// (a TightVNC service is installed): only then is `vnc_set` worth sending (D-51).
+	VNCControl bool `json:"vnc_control"`
+}
+
+// TypeVNCSet is server -> agent: start or stop the host's VNC server. There is no
+// reply: the next heartbeat shows the result in `vnc`.
+const TypeVNCSet = "vnc_set"
+
+// VNCSet is the body of vnc_set. Enabled false stops the VNC server and keeps it
+// from starting at boot; true sets it to start at boot and starts it now.
+type VNCSet struct {
+	Enabled bool `json:"enabled"`
 }

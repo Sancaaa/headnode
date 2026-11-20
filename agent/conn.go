@@ -20,10 +20,11 @@ import (
 // (`file_change`), 0.4.0 the file manager's copy, chmod and props, and 0.5.0 the
 // editor's read and write and folder downloads (zip), and 0.6.0 the unpacking of
 // a folder sent to the host (`fetch` with extract), and 0.7.0 the Windows agent
-// (system info and the Windows service): an older agent ignores the command,
-// stays silent or answers "unknown operation", so the version is how a person
-// can tell whether a host is up to date.
-const Version = "0.7.0"
+// (system info and the Windows service), and 0.8.0 the "vnc" flag in the
+// heartbeat (D-50) and starting and stopping the VNC server (D-51): an older agent ignores the command, stays silent or answers
+// "unknown operation", so the version is how a person can tell whether a host is
+// up to date.
+const Version = "0.8.0"
 
 const (
 	heartbeatInterval = 20 * time.Second
@@ -163,8 +164,19 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	readFailed := make(chan error, 1)
+	// A command that changes something a heartbeat reports (the VNC server) nudges
+	// this channel, and the loop below sends a heartbeat at once instead of in up
+	// to 20 seconds. One slot is enough: a nudge that finds the slot full is
+	// already as good as delivered.
+	kick := make(chan struct{}, 1)
+	nudge := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
-		readFailed <- readCommands(connCtx, ctx, cfg, conn)
+		readFailed <- readCommands(connCtx, ctx, cfg, conn, nudge)
 		cancel()
 	}()
 
@@ -173,12 +185,15 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 
 	// The zero value makes the first heartbeat report the CPU average since boot.
 	var prevCPU cpuTimes
+	var vnc vncProbe
 	for {
 		hb, cur, err := readHeartbeat(prevCPU)
 		if err != nil {
 			return fmt.Errorf("read system info: %w", err)
 		}
 		prevCPU = cur
+		hb.VNC = vnc.listening()
+		hb.VNCControl = canControlVNC()
 		if err := send(connCtx, conn, protocol.TypeHeartbeat, hb); err != nil {
 			return err
 		}
@@ -190,13 +205,16 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 			}
 			return fmt.Errorf("server closed the connection: %w", <-readFailed)
 		case <-ticker.C:
+		case <-kick:
+			vnc.at = time.Time{} // look again now, the whole point is to see what just changed
 		}
 	}
 }
 
-// readCommands handles what the server sends on the control connection. So far
-// that is only `open`: start a session. It returns when the connection ends.
-func readCommands(connCtx, agentCtx context.Context, cfg Config, conn *websocket.Conn) error {
+// readCommands handles what the server sends on the control connection: `open`
+// (start a session), `fetch` (download a file) and `vnc_set`. It returns when
+// the connection ends. nudge asks the heartbeat loop for an immediate heartbeat.
+func readCommands(connCtx, agentCtx context.Context, cfg Config, conn *websocket.Conn, nudge func()) error {
 	for {
 		_, data, err := conn.Read(connCtx)
 		if err != nil {
@@ -226,6 +244,14 @@ func readCommands(connCtx, agentCtx context.Context, cfg Config, conn *websocket
 			// A transfer can take minutes, so it gets its own goroutine like a
 			// session does. It reports on this connection when it is done.
 			go runFetch(agentCtx, cfg, conn, fetch)
+			case protocol.TypeVNCSet:
+				var set protocol.VNCSet
+				if err := json.Unmarshal(env.Data, &set); err != nil {
+					slog.Warn("bad vnc_set message", "err", err)
+					continue
+				}
+				// Stopping a service can take seconds: not on the reading goroutine.
+				go runVNCSet(set, nudge)
 		default:
 			slog.Warn("unknown message from the server", "type", env.Type)
 		}

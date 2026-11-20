@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	// Not admin-only: any user with the operator role may open a terminal.
 	// handleOpenSession checks that with can().
 	api.HandleFunc("POST /api/hosts/{id}/sessions", s.handleOpenSession)
+	api.HandleFunc("POST /api/hosts/{id}/vnc", s.handleSetVNC)
 	// Any role with files_read may download: handleDownload checks that.
 	api.HandleFunc("GET /api/hosts/{id}/download", s.handleDownload)
 	// "Send to hosts" in the file manager: copy a file from a host to the server's

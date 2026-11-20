@@ -24,9 +24,18 @@ It downloads the agent from your server into `C:\Program Files\headnode\`, enrol
 - **The agent's log** is `C:\ProgramData\headnode\agent.log`.
 - **Windows Defender or SmartScreen** may warn about the program because it is not signed. If it removes the file, add an exclusion for `C:\Program Files\headnode\`; if it only warns, the script still works.
 
-## 2. Install a VNC server, for loopback only
+The same command also sets up the screen (D-50): it downloads TightVNC from tightvnc.com, checks that the file is signed by its makers, and installs it as a service that **accepts connections from this machine only**. It is installed **switched off**, like a VPN client that is installed but not connected: the host's row in the dashboard shows **Start VNC**, and nothing of the screen is shared until someone presses it. After that the **VNC** button appears, and **Stop VNC** (on the Screen page) switches it off again. You have nothing else to install; step 2 is only for when that did not work. The command takes two options at the end:
 
-headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
+- `-VncPassword SECRET` makes the screen ask for a password (1 to 8 letters or digits) on every connection. Without it, the dashboard login and the operator role are the only gate. Use it on a machine where several people are logged in at once, because any of them could reach the screen from inside the machine.
+- `-NoVnc` leaves VNC alone, if you use your own or want no screen access.
+
+If a VNC server already listens on port 5900, the script keeps it as it is and only warns when it is open to the network.
+
+**Switching the screen on and off (D-51).** A VNC server uses CPU and memory all the time, even when nobody is watching, and shares the screen while it runs, so the installer leaves it off. The Hosts page shows **Start VNC** where the VNC button would be; one click starts it and the VNC button comes back within seconds. **Stop VNC** on its Screen page stops it again and sets it to start only by hand, so it stays off after a reboot. (Starting it sets it to start at boot, until you stop it again.) You need the same operator role as for the screen itself, and every start and stop is in the audit log. This works for the TightVNC the install command set up (the service named `tvnserver`).
+
+## 2. Install a VNC server by hand, for loopback only
+
+Skip this if the install command set up TightVNC (the VNC button is there). Otherwise: headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
 
 **TightVNC** (free, tightvnc.com):
 
@@ -49,7 +58,7 @@ Get-NetTCPConnection -LocalPort 5900 -State Listen | Select-Object LocalAddress,
 
 ## 3. Connect from the browser
 
-In the dashboard, click **VNC** on the host's row (or its **Screen** tab). The screen opens in the page, scaled to the window. It asks for the VNC password once per connection (it is not stored), and has a **Ctrl+Alt+Del** button for the Windows login screen and **Disconnect** to end the session. If the page says nothing is listening on port 5900, the VNC server is not running or is not on the standard port: check step 2. You need the **operator** role in the host's group. Closing the tab ends the session on the host.
+In the dashboard, click **VNC** on the host's row (or its **Screen** tab). Both appear only when the agent finds a VNC server on the host, within a minute of it starting; an agent older than 0.8.0 never reports it, so update it by running the install command again. The screen opens in the page, scaled to the window. If the VNC server has a password, the page asks for it once per connection (it is not stored). It has a **Ctrl+Alt+Del** button for the Windows login screen and **Disconnect** to end the session. If the page says nothing is listening on port 5900, the VNC server is not running or is not on the standard port: check step 2. You need the **operator** role in the host's group. Closing the tab ends the session on the host.
 
 The browser can only reach port 5900. For anything else (RDP, SSH, a VNC server on another port) use `hnctl`, below.
 

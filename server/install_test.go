@@ -128,6 +128,15 @@ func TestWindowsInstallScript(t *testing.T) {
 	if !strings.Contains(body, "/download/headnode-agent-windows-amd64.exe") || !agentBinaries["headnode-agent-windows-amd64.exe"] {
 		t.Error("the script and the server's list of programs do not agree on the Windows file name")
 	}
+	// The screen must never be opened to the network, and the downloaded
+	// installer must be checked before it runs as administrator (D-50).
+	for _, want := range []string{"VALUE_OF_LOOPBACKONLY=1", "SERVER_ADD_FIREWALL_EXCEPTION=0", "Get-AuthenticodeSignature",
+		// and the screen must be off until somebody turns it on (D-50)
+		"Set-Service -Name tvnserver -StartupType Manual", "Stop-Service -Name tvnserver"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the script no longer contains %q, which keeps the VNC server safe", want)
+		}
+	}
 }
 
 // The same address check protects the Windows script: its quotes can be ended too.

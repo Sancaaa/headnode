@@ -49,7 +49,7 @@ Since M2 every `/api/*` route except `POST /api/login` needs a login. The group 
  "group_id":1,"group_name":"Office",
  "last_seen_at":"2026-11-20T04:19:22Z","created_at":"2026-11-20T04:18:06Z",
  "heartbeat":{"cpu_percent":2.4,"mem_used":7516192768,"mem_total":16523436032,
-              "disk_used":41000000000,"disk_total":250000000000,"uptime_sec":67240},
+              "disk_used":41000000000,"disk_total":250000000000,"uptime_sec":67240,"vnc":false},
  "info":{"protocol":1,"agent_version":"0.1.0","hostname":"web-01","os":"linux","arch":"amd64",
          "platform":"Debian GNU/Linux 12 (bookworm)","kernel":"6.1.0-18-amd64",
          "cpu_model":"Intel(R) Core(TM) i5-12400","cpu_cores":12,
@@ -100,7 +100,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
 
 #### Uploading and sending files (M4)
 
@@ -167,6 +167,10 @@ With `"extract": true` the file must be a `.zip` (`400` otherwise) and `dest_pat
 | 500 | The row was removed but the file could not be deleted from disk. The server log says why. |
 
 Status is kept in the server's memory (D-03) for 24 hours. A host whose control connection drops while its transfer is pending is marked `error` with `"the host disconnected before it reported a result"`, since it can no longer report. The file may in fact have arrived. The audit log has `file_upload`, `transfer_start` (once, with the file, the first 12 characters of its hash, the destination and the number of hosts) and `transfer_result` (once per host).
+
+#### Starting and stopping a host's VNC server (D-51)
+
+`POST /api/hosts/{id}/vnc` with `{"enabled": true|false}` → `202 {"ok":true}` as soon as the agent has been told (the result shows in `heartbeat.vnc` a few seconds later). It needs the same permission as a shell (operator in the host's group, or admin). `404` for a host the user may not see, `403` without the permission, `409` when the host is offline or its agent does not report `vnc_control` (it has no VNC server it can control). Audited as `vnc_on` or `vnc_off`. See `vnc_set` in §3.
 
 #### Host management and enroll tokens (M2, admin only)
 
@@ -259,6 +263,8 @@ The same for Windows hosts (D-47): a PowerShell script, served with this server'
 
 Run in PowerShell opened as administrator, on 64-bit Windows. It downloads `/download/headnode-agent-windows-amd64.exe` to `C:\Program Files\headnode\headnode-agent.exe` (through a temporary file; a running service is stopped for the moment of the replacement, because Windows cannot overwrite a running program); if `C:\ProgramData\headnode\agent.json` does not exist, restricts that folder to `SYSTEM` and `Administrators` and enrolls with `-Token`; then runs `headnode-agent service install`, which registers the Windows service `headnode-agent` (automatic start, restart after a failure) and starts it. Run again without `-Token`, it only updates and restarts. The script is one script block that PowerShell reads completely before running, so a download cut short is a syntax error and does nothing. It reports errors with `throw`, never `exit`, because it runs inside the person's own window.
 
+After the service, it sets up the screen (D-50), unless `-NoVnc` is given: if nothing listens on port 5900 and no `tvnserver` service exists, it downloads TightVNC's MSI from tightvnc.com, requires a valid Authenticode signature from GlavSoft, and installs it silently as a service that accepts loopback connections only (no firewall rule, Ctrl+Alt+Del allowed), with no VNC password, or with `-VncPassword` (1 to 8 letters or digits) as its password. It then checks that port 5900 listens on this machine only, and finally **switches the service off**: stopped, and start type manual (D-50). The screen is shared only after someone presses Start VNC in the dashboard (`vnc_set`, D-51). Run again, the script leaves an installed TightVNC as it is. A failure here is a warning and never undoes the agent.
+
 #### `GET /download/headnode-agent-{os}-{arch}` (M6)
 
 The agent program, as `application/octet-stream`, for a platform the server has: `headnode-agent-linux-amd64`, `headnode-agent-linux-arm64` and `headnode-agent-windows-amd64.exe` (the `.exe` is part of the name; D-12, D-47). It needs no login, because a host that is about to enroll has nothing to log in with, and the install command has to fetch it first. That is safe because the program holds no secret: a host belongs to this server only through its enroll token. `Range` is supported, and `Cache-Control: no-cache` makes sure a rebuilt program reaches the next install.
@@ -344,9 +350,12 @@ A **Windows** agent (D-47) sends the same two messages with `"os": "windows"`. I
   "cpu_percent": 2.4,
   "mem_used": 7516192768, "mem_total": 16523436032,
   "disk_used": 41000000000, "disk_total": 250000000000,
-  "uptime_sec": 67240
+  "uptime_sec": 67240,
+  "vnc": true, "vnc_control": true
 }}
 ```
+`vnc` is `true` when something accepts connections on `127.0.0.1:5900` on the host (the agent checks once a minute, D-50). The dashboard shows the VNC button and the Screen tab only for hosts where it is `true`. `vnc_control` is `true` when the agent can start and stop the host's VNC server (a TightVNC service is installed, so only on Windows, D-51): the dashboard then offers **Start VNC** and **Stop VNC**. An agent older than 0.8.0 sends neither, which reads as `false`. After a `vnc_set` the agent sends a heartbeat at once, outside the 20-second rhythm, so the new `vnc` value shows up in a few seconds.
+
 The server treats the agent as **dead** if no message at all arrives within 60 seconds, and closes the connection. This is the only liveness mechanism. There is no separate ping/pong.
 
 **`fetch_result`**: the outcome of a `fetch` command.
@@ -383,6 +392,12 @@ In detail, the agent: (1) requires `dest_path` to be absolute and `mode` to be a
 **`fetch` with `"extract": true`** (a whole folder, D-43): the file is a zip archive and `dest_path` is an existing **folder**. Steps 2 to 4 are the same, with the temporary file inside `dest_path`; then, instead of renaming it, the agent unpacks the archive and removes it. The archive comes from outside the agent, so it is treated as hostile: every entry path is checked **before anything is written**, and one that is absolute, contains `..` or a backslash makes the whole archive refused (`"the archive is not safe to unpack…"`); links and special files are refused the same way; at most 100,000 entries and 16 GB, and the size is enforced while writing, not only trusted from the headers; modes are kept but only the nine rwx bits (nothing arrives setuid). Everything is unpacked into a staging folder inside `dest_path` first, and the top-level items are moved in only if **none of them exists yet** (`"\"project\" already exists in the destination folder"`): a refused or failed unpack leaves `dest_path` exactly as it was. Files that are in `dest_path` already and are not in the archive are never touched. An agent older than 0.6.0 does not know `extract`: it fails the transfer (it cannot rename a file over a folder).
 
 Then it answers with `fetch_result`, whose `error` is short plain text (`"permission denied"`, `"the file did not arrive intact (checksum mismatch)"`, …). A transfer to a host that is offline is not queued: it fails at once with `"host offline"` (D-03).
+
+**`vnc_set`**: start or stop the host's VNC server (D-51).
+```json
+{"type":"vnc_set","data":{"enabled":false}}
+```
+`enabled: false` stops the VNC service **and** sets it to start only by hand, so it does not come back at the next boot and use the resources again. `enabled: true` sets it to start at boot and starts it now. There is no reply: success or failure shows in the next heartbeat's `vnc`, and a failure is logged on the host. An agent without a controllable VNC server (`vnc_control` false) ignores the message with a warning in its log; an agent older than 0.8.0 logs "unknown message".
 
 ## 4. Sessions
 

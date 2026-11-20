@@ -105,9 +105,11 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 - [ ] noVNC vendored (like xterm.js), with a decisions entry (D-49)
 - [ ] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
 - [ ] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
-- [ ] **VNC** button on host rows
+- [ ] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)
+- [ ] **Start VNC** / **Stop VNC** from the dashboard for Windows hosts, to save the machine's resources (D-51)
+- [ ] `install.ps1` installs TightVNC itself, loopback only, so a client runs one command and gets the screen (D-50); `-NoVnc` and `-VncPassword` options
 
-**Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way.
+**Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way. A Windows host added with the one install command shows **Start VNC** (the screen is off by default, D-50), and after one click its VNC button, with nothing else to install.
 
 ---
 
