@@ -945,6 +945,16 @@ async function mountScreen(host, box, status, cad, toggle, power) {
   }
   if (disposed) return;
 
+  // To see what the VNC server offers during login (the "Server security types" lines)
+  // when the console shows only a failure, run  localStorage.setItem('headnode-vnc-debug', '1')
+  // in the browser console and reload. Off by default: debug logging is very chatty.
+  try {
+    if (localStorage.getItem('headnode-vnc-debug')) {
+      (await import('/vendor/novnc/core/util/logging.js')).initLogging('debug');
+    }
+  } catch (err) { /* no storage, or an unexpected library layout: carry on without it */ }
+  if (disposed) return;
+
   async function connect() {
     attempting = true;
     everConnected = false;
@@ -1017,8 +1027,8 @@ async function mountScreen(host, box, status, cad, toggle, power) {
       // the viewer could not log in, or a password was not given. The usual cause is
       // TightVNC 4, whose login (SRP) no browser viewer speaks (D-53).
       status.textContent = 'The viewer could not log in to the VNC server on this host. ' +
-        'TightVNC 4 cannot be used from the browser: TightVNC 2.8.90 can (see docs/windows.md). ' +
-        'The browser console (F12) has the exact reason.';
+        'TightVNC 4 cannot be used from the browser: run the install command on the host again with -ReplaceVnc ' +
+        'at the end to swap it for TightVNC 2.8.90 (docs/windows.md). The browser console (F12) has the exact reason.';
     } else {
       status.textContent = clean === false ? 'The connection was lost.' : 'Disconnected.';
     }

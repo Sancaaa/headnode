@@ -10,13 +10,15 @@
 # the agent. It is installed SWITCHED OFF: nothing of this computer's screen is
 # shared until someone presses Start VNC in the dashboard. Options:
 #   -NoVnc              do not touch VNC (you have your own, or want no screen access)
+#   -ReplaceVnc         uninstall TightVNC 4 if it is there (the browser viewer cannot log
+#                       in to it) and install TightVNC 2.8.90 in its place
 #   -VncPassword SECRET ask for this password when connecting (1 to 8 letters or
 #                       digits; VNC ignores anything past 8). Without it, the
 #                       dashboard login and role are the only gate.
 #
 # The whole script is one script block that PowerShell reads completely before it
 # runs anything: a download that is cut short is a syntax error, and does nothing.
-param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '')
+param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '', [switch]$ReplaceVnc)
 
 $ErrorActionPreference = 'Stop'
 $Server = '__SERVER__'
@@ -117,6 +119,29 @@ if ($LASTEXITCODE -ne 0) { Fail 'installing the service failed' }
 # --- the screen. Not being able to set it up must not undo the agent, which is
 # already installed and running: it only costs the VNC button, so it is a warning.
 function Install-Vnc {
+    # TightVNC 4 logs in with SRP, which the dashboard's viewer (noVNC) cannot do, so a
+    # machine that has it shows no screen in the browser (D-53). With -ReplaceVnc it is
+    # uninstalled here (its settings and password go with it) and 2.8.90 is installed
+    # below; without it, the machine is left as it is and told how to fix it.
+    $uninstallKeys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    $tight4 = @(Get-ItemProperty $uninstallKeys -ErrorAction SilentlyContinue | Where-Object {
+        $_.DisplayName -like 'TightVNC*' -and $_.DisplayVersion -match '^(\d+)\.' -and [int]$Matches[1] -ge 4
+    })
+    if ($tight4.Count -gt 0 -and -not $ReplaceVnc) {
+        Write-Warning "TightVNC $($tight4[0].DisplayVersion) is installed. The dashboard's browser viewer cannot log in to TightVNC 4."
+        Write-Warning 'To replace it with TightVNC 2.8.90, run this command again with -ReplaceVnc at the end (its settings and password are removed), or use -NoVnc to leave it alone.'
+        return
+    }
+    foreach ($app in $tight4) {
+        if ($app.PSChildName -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
+            Fail "cannot uninstall $($app.DisplayName): it is not an MSI package. Uninstall it in Settings > Apps, then run this command again"
+        }
+        Write-Host "Uninstalling $($app.DisplayName) $($app.DisplayVersion)..."
+        $u = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', $app.PSChildName, '/quiet', '/norestart') -Wait -PassThru
+        if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Fail "uninstalling TightVNC failed (exit code $($u.ExitCode))" }
+    }
+
     $listening = @(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)
     if ($listening.Count -gt 0) {
         Write-Host 'A VNC server already listens on port 5900: keeping it as it is.'

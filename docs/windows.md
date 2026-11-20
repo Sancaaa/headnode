@@ -28,6 +28,7 @@ The same command also sets up the screen (D-50): it downloads TightVNC from tigh
 
 - `-VncPassword SECRET` makes the screen ask for a password (1 to 8 letters or digits) on every connection. Without it, the dashboard login and the operator role are the only gate. Use it on a machine where several people are logged in at once, because any of them could reach the screen from inside the machine.
 - `-NoVnc` leaves VNC alone, if you use your own or want no screen access.
+- `-ReplaceVnc` uninstalls TightVNC 4 if the machine has it and installs TightVNC 2.8.90 in its place (its settings and password are removed). Without it, a machine with TightVNC 4 is left as it is, with a warning: the dashboard's browser viewer cannot log in to TightVNC 4 (D-53).
 
 If a VNC server already listens on port 5900, the script keeps it as it is and only warns when it is open to the network.
 
@@ -37,7 +38,7 @@ If a VNC server already listens on port 5900, the script keeps it as it is and o
 
 Skip this if the install command set up TightVNC (the VNC button is there). Otherwise: headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
 
-**TightVNC 2.8.90** (free, tightvnc.com/download.php, the "2.x" download, not 4.x): the browser's Screen page works with TightVNC 2.8 and **not** with TightVNC 4, which logs in with a method (SRP) that no browser viewer speaks (D-53). If you already have 4.x, uninstall it (Settings → Apps), then run the install command from step 1 again: it installs 2.8.90 for you. 4.x still works with `hnctl forward` and TightVNC's own viewer (step 4).
+**TightVNC 2.8.90** (free, tightvnc.com/download.php, the "2.x" download, not 4.x): the browser's Screen page works with TightVNC 2.8 and **not** with TightVNC 4, which logs in with a method (SRP) that no browser viewer speaks (D-53). If you already have 4.x, run the install command from step 1 again with `-ReplaceVnc` at the end: it uninstalls 4.x and installs 2.8.90 for you (or uninstall 4.x in Settings → Apps and run the command without it). 4.x still works with `hnctl forward` and TightVNC's own viewer (step 4).
 
 1. Run the installer and choose a *Custom* install. Keep **TightVNC Server** and turn off the Viewer if you do not need it. Tick **Register TightVNC Server as a system service** (so it works at the login screen and after a reboot).
 2. When it asks, set a **remote access password** (and an administrative password). Use a long one.
