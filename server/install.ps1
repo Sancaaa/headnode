@@ -74,11 +74,25 @@ try {
         Stop-Service -Name $ServiceName -Force
         $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
     }
-    # Delete the old program first: Move-Item -Force does not always replace an existing
-    # file on Windows PowerShell 5 ("Cannot create a file when that file already exists").
-    # If something still holds the old program, this fails with a clear message.
-    if (Test-Path $Bin) { Remove-Item -Force -Path $Bin }
+    # An agent that was started by hand (in a terminal, say) is not the service, so
+    # stopping the service did not stop it, and Windows will not delete a program that
+    # is running. It is the agent being replaced, so it goes too.
+    $stray = @(Get-Process -Name 'headnode-agent' -ErrorAction SilentlyContinue)
+    if ($stray.Count -gt 0) {
+        Write-Host 'Stopping a headnode-agent that is running outside the service...'
+        $stray | Stop-Process -Force
+        $stray | ForEach-Object { $_.WaitForExit(10000) | Out-Null }
+    }
+    # Windows will not delete a running program, but it does let one be renamed. So the
+    # old one is moved aside and the new one takes its name. (Move-Item -Force alone does
+    # not always replace an existing file on Windows PowerShell 5: "Cannot create a file
+    # when that file already exists".) The old copy is deleted now, if nothing holds it,
+    # or at the next update.
+    $old = "$Bin.old"
+    Remove-Item -Force -ErrorAction SilentlyContinue $old
+    if (Test-Path $Bin) { Rename-Item -Force -Path $Bin -NewName (Split-Path $old -Leaf) }
     Move-Item -Path $tmp -Destination $Bin
+    Remove-Item -Force -ErrorAction SilentlyContinue $old
 } finally {
     Remove-Item -Force -ErrorAction SilentlyContinue $tmp
 }
