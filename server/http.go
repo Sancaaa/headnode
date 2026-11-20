@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"headnode/protocol"
@@ -18,9 +20,11 @@ import (
 // interface: handlers are methods so they can reach s.db without globals.
 type Server struct {
 	db         *sql.DB
-	agents     *registry     // which agents are online right now
-	sessions   *sessionTable // shells waiting for their two sides, or running
-	loginLimit *loginLimiter // slows down password guessing
+	agents     *registry      // which agents are online right now
+	sessions   *sessionTable  // shells waiting for their two sides, or running
+	transfers  *transferTable // file sends in progress or recently finished (D-03)
+	loginLimit *loginLimiter  // slows down password guessing
+	filesDir   string         // where uploaded files are stored; "" = uploads are off
 }
 
 func New(db *sql.DB) *Server {
@@ -28,8 +32,20 @@ func New(db *sql.DB) *Server {
 		db:         db,
 		agents:     newRegistry(),
 		sessions:   newSessionTable(sessionPairTimeout),
+		transfers:  newTransferTable(),
 		loginLimit: newLoginLimiter(),
 	}
+}
+
+// UseFilesDir turns on file uploads, storing the files in dir (created if it
+// does not exist). Only the owner may read it: an uploaded file can be a
+// program or a secret.
+func (s *Server) UseFilesDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create files directory: %w", err)
+	}
+	s.filesDir = dir
+	return nil
 }
 
 // Handler returns the router. Go 1.22+ patterns like "POST /agent/enroll"
@@ -58,6 +74,14 @@ func (s *Server) Handler() http.Handler {
 	// Not admin-only: any user with the operator role may open a terminal.
 	// handleOpenSession checks that with can().
 	api.HandleFunc("POST /api/hosts/{id}/sessions", s.handleOpenSession)
+	// Any role with files_read may download: handleDownload checks that.
+	api.HandleFunc("GET /api/hosts/{id}/download", s.handleDownload)
+	// Uploading and sending files need the files_write permission (on the target
+	// hosts for a send, on any group for an upload): the handlers check it.
+	api.HandleFunc("POST /api/files", s.handleUpload)
+	api.HandleFunc("POST /api/transfers", s.handleCreateTransfer)
+	api.HandleFunc("GET /api/transfers", s.handleListTransfers)
+	api.HandleFunc("GET /api/transfers/{id}", s.handleGetTransfer)
 	api.HandleFunc("PATCH /api/hosts/{id}", s.adminOnly(s.handlePatchHost))
 	api.HandleFunc("DELETE /api/hosts/{id}", s.adminOnly(s.handleDeleteHost))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agent/enroll", s.handleEnroll)
 	mux.HandleFunc("GET /agent/connect", s.handleAgentConnect)
 	mux.HandleFunc("GET /agent/sessions/{id}", s.handleAgentSession)
+	mux.HandleFunc("GET /agent/files/{id}", s.handleAgentFile)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	// The browser's WebSocket for a session. It is not under /api/, so it gets
 	// the login wrapper by hand. handleUISession adds the Origin check.
@@ -123,9 +148,15 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // readJSON decodes a small JSON request body into into. On failure it has
 // already answered 400 and returns false, so the caller just returns.
 func readJSON(w http.ResponseWriter, r *http.Request, into any) bool {
-	// Every request body we accept is a few hundred bytes. The cap stops anyone
-	// from making the server read a huge one.
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	// Almost every request body we accept is a few hundred bytes.
+	return readJSONLimit(w, r, into, 4096)
+}
+
+// readJSONLimit is readJSON with a bigger cap, for a request that can carry a
+// list (a file send names every target host).
+func readJSONLimit(w http.ResponseWriter, r *http.Request, into any, limit int64) bool {
+	// The cap stops anyone from making the server read a huge body.
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	if err := json.NewDecoder(r.Body).Decode(into); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return false

@@ -153,7 +153,7 @@ Limitation **accepted** for now: the agent usually runs as root/SYSTEM. Anyone a
 ```
 cmd/headnode/main.go        flags + start the server
 cmd/headnode-agent/main.go  subcommands: run | enroll | service install/uninstall
-cmd/hnctl/main.go           (M5) forward
+cmd/hnctl/                  main.go (commands), config.go (saved login), client.go (API calls), forward.go (tunnels)
 server/                     one package, split by FILE:
   http.go                   routing + login/origin middleware
   auth.go                   login, cookies, can()
@@ -164,12 +164,14 @@ server/                     one package, split by FILE:
   agents.go                 online agent registry, control connections
   sessions.go               session table, open/attach handlers
   relay.go                  copies messages between two WebSockets
-  files.go                  upload / download / fetch
+  upload.go                 upload to the server, serve a file to an agent
+  transfers.go              bulk send: status per host, fetch results
+  download.go               stream a file from a host to the browser
   db.go, schema.sql         SQLite access
   enroll.go                 enroll tokens, agent enrollment
   hosts.go                  host list / detail API
   audit.go
-agent/                      conn.go (control + reconnect), shell.go, files.go, tunnel.go, sysinfo.go
+agent/                      conn.go (control + reconnect), shell.go, files.go, download.go, fetch.go, tunnel.go, sysinfo.go
 protocol/                   JSON message structs shared by server and agent
 web/                        index.html, *.js, style.css (embedded into the server binary)
 ```

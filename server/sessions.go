@@ -41,15 +41,38 @@ type session struct {
 	expired     bool // nobody paired it in time
 }
 
+// finishedKeepFor is how long the owner of an ended files session is
+// remembered. A files session reports its changes on the agent's control
+// connection, a different TCP connection from the one the relay uses, so the
+// last report can arrive a moment after the browser left and the session was
+// removed. A few minutes is far more than that race needs, and short enough that
+// the map stays tiny.
+const finishedKeepFor = 5 * time.Minute
+
+// finishedSession is all that is kept of an ended files session: who it was
+// for and which host it was on, so a late change report is still attributed.
+type finishedSession struct {
+	userID  int64
+	agentID string
+	at      time.Time // when it ended
+}
+
 // sessionTable is every session that is waiting or running.
 type sessionTable struct {
 	mu          sync.Mutex
 	byID        map[string]*session
-	pairTimeout time.Duration // a field so tests can use a short one
+	finished    map[string]finishedSession // files sessions only, for finishedKeepFor
+	pairTimeout time.Duration              // a field so tests can use a short one
+	keepFor     time.Duration              // a field so tests can use a short one
 }
 
 func newSessionTable(pairTimeout time.Duration) *sessionTable {
-	return &sessionTable{byID: make(map[string]*session), pairTimeout: pairTimeout}
+	return &sessionTable{
+		byID:        make(map[string]*session),
+		finished:    make(map[string]finishedSession),
+		pairTimeout: pairTimeout,
+		keepFor:     finishedKeepFor,
+	}
 }
 
 // create makes a session and starts its countdown.
@@ -94,8 +117,41 @@ func (t *sessionTable) get(id string) *session {
 func (t *sessionTable) end(sess *session) {
 	t.mu.Lock()
 	delete(t.byID, sess.id)
+	if sess.kind == protocol.KindFiles {
+		t.rememberLocked(sess)
+	}
 	t.mu.Unlock()
 	sess.endOnce.Do(func() { close(sess.done) })
+}
+
+// rememberLocked keeps the owner of an ended files session (see
+// finishedKeepFor), and drops the ones that have been kept long enough. The
+// cleanup happens here, on insert, like a plain "sweep when adding": no timer
+// and no background goroutine, and the map cannot grow without bound because
+// every insert shrinks it back to the last few minutes. The caller holds t.mu.
+func (t *sessionTable) rememberLocked(sess *session) {
+	now := time.Now()
+	for id, old := range t.finished {
+		if now.Sub(old.at) > t.keepFor {
+			delete(t.finished, id)
+		}
+	}
+	t.finished[sess.id] = finishedSession{userID: sess.userID, agentID: sess.agentID, at: now}
+}
+
+// filesOwner says who a files session was opened for and on which host, whether
+// it is still running or ended a moment ago. Only files sessions are known: no
+// other kind reports changes, so a report that names one is bogus.
+func (t *sessionTable) filesOwner(id string) (userID int64, agentID string, ok bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sess := t.byID[id]; sess != nil {
+		return sess.userID, sess.agentID, sess.kind == protocol.KindFiles
+	}
+	if old, found := t.finished[id]; found && time.Since(old.at) <= t.keepFor {
+		return old.userID, old.agentID, true
+	}
+	return 0, "", false
 }
 
 func (sess *session) claimBrowser() bool {
@@ -142,18 +198,18 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind   string `json:"kind"`
 		Params struct {
-			Cols int `json:"cols"`
-			Rows int `json:"rows"`
+			Cols   int    `json:"cols"`
+			Rows   int    `json:"rows"`
+			Target string `json:"target"`
 		} `json:"params"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.Kind != protocol.KindShell {
+	if req.Kind != protocol.KindShell && req.Kind != protocol.KindFiles && req.Kind != protocol.KindTunnel {
 		writeError(w, http.StatusBadRequest, "unsupported session kind")
 		return
 	}
-	cols, rows := protocol.ClampSize(req.Params.Cols, req.Params.Rows)
 
 	exists, err := s.hostExists(hostID)
 	if err != nil {
@@ -170,24 +226,74 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "host not found")
 		return
 	}
-	canShell, err := s.can(u, hostID, actionShell)
-	if err != nil {
-		internalError(w, "check permission", err)
-		return
+	// What the session may do depends on its kind and on the user's role. The
+	// agent gets these parameters from the server, never from the browser, so
+	// nobody can give themselves more than their role allows. The relay does not
+	// look inside a session (D-27), which is why a files session carries its
+	// "read-only" flag to the agent instead of the server policing each request.
+	var kindParams any
+	readOnly := false
+	tunnelTarget := ""
+	switch req.Kind {
+	case protocol.KindTunnel:
+		// A tunnel reaches anything the host can reach on its own loopback: its
+		// database, its admin panels, its SSH. That is as powerful as a shell, so
+		// it needs the same permission (architecture.md §6).
+		allowed, err := s.can(u, hostID, actionShell)
+		if err != nil {
+			internalError(w, "check permission", err)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "you do not have permission to open a tunnel to this host")
+			return
+		}
+		target, err := protocol.ParseTunnelTarget(req.Params.Target)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		tunnelTarget = target
+		kindParams = protocol.TunnelParams{Target: target}
+	case protocol.KindShell:
+		allowed, err := s.can(u, hostID, actionShell)
+		if err != nil {
+			internalError(w, "check permission", err)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "you do not have permission to open a terminal on this host")
+			return
+		}
+		cols, rows := protocol.ClampSize(req.Params.Cols, req.Params.Rows)
+		kindParams = protocol.ShellParams{Cols: cols, Rows: rows}
+	case protocol.KindFiles:
+		canRead, err := s.can(u, hostID, actionFilesRead)
+		if err != nil {
+			internalError(w, "check permission", err)
+			return
+		}
+		if !canRead {
+			writeError(w, http.StatusForbidden, "you do not have permission to browse files on this host")
+			return
+		}
+		canWrite, err := s.can(u, hostID, actionFilesWrite)
+		if err != nil {
+			internalError(w, "check permission", err)
+			return
+		}
+		readOnly = !canWrite
+		kindParams = protocol.FilesParams{ReadOnly: readOnly}
 	}
-	if !canShell {
-		writeError(w, http.StatusForbidden, "you do not have permission to open a terminal on this host")
+	params, err := json.Marshal(kindParams)
+	if err != nil {
+		internalError(w, "encode session parameters", err)
 		return
 	}
 
 	sess, err := s.sessions.create(u.ID, hostID, req.Kind)
 	if err != nil {
 		internalError(w, "create session", err)
-		return
-	}
-	params, err := json.Marshal(protocol.ShellParams{Cols: cols, Rows: rows})
-	if err != nil {
-		internalError(w, "encode session parameters", err)
 		return
 	}
 	err = s.agents.send(hostID, protocol.TypeOpen, protocol.Open{SessionID: sess.id, Kind: sess.kind, Params: params})
@@ -203,8 +309,26 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.audit(u.ID, hostID, "session_open", "kind="+sess.kind)
-	writeJSON(w, http.StatusCreated, map[string]string{"id": sess.id})
+	detail := "kind=" + sess.kind
+	reply := map[string]any{"id": sess.id}
+	if sess.kind == protocol.KindFiles {
+		detail += fmt.Sprintf(" readonly=%t", readOnly)
+		reply["readonly"] = readOnly // so the page can hide the buttons that would be refused
+	}
+	if sess.kind == protocol.KindTunnel {
+		detail += " target=" + tunnelTarget
+	}
+	s.audit(u.ID, hostID, "session_open", detail)
+	writeJSON(w, http.StatusCreated, reply)
+}
+
+// actionFor is what a user needs to be allowed to attach to a session of this
+// kind. Anything unknown needs the strictest one.
+func actionFor(kind string) action {
+	if kind == protocol.KindFiles || kind == protocol.KindDownload {
+		return actionFilesRead
+	}
+	return actionShell
 }
 
 func (s *Server) hostExists(id string) (bool, error) {
@@ -222,8 +346,9 @@ func (s *Server) hostExists(id string) (bool, error) {
 func (s *Server) handleUISession(w http.ResponseWriter, r *http.Request) {
 	// requireLogin only checks Origin on changes, and a WebSocket handshake is a
 	// GET. But a page on another site could open this WebSocket with the
-	// visitor's cookie (cross-site WebSocket hijacking), so check it here.
-	if !sameOrigin(r) {
+	// visitor's cookie (cross-site WebSocket hijacking), so check it here. A
+	// bearer token (hnctl) is not ambient, so it needs no Origin (D-36).
+	if !viaBearer(r) && !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "bad origin")
 		return
 	}
@@ -237,7 +362,7 @@ func (s *Server) handleUISession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Permissions can change in the seconds between the two requests.
-	allowed, err := s.can(u, sess.agentID, actionShell)
+	allowed, err := s.can(u, sess.agentID, actionFor(sess.kind))
 	if err != nil {
 		internalError(w, "check permission", err)
 		return

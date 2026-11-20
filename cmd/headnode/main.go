@@ -48,9 +48,15 @@ func serve(args []string) {
 	db := openDB(*dbPath)
 	defer db.Close()
 
+	srv := server.New(db)
+	// Uploaded files live next to the database: data/headnode.db, data/files/.
+	if err := srv.UseFilesDir(filepath.Join(filepath.Dir(*dbPath), "files")); err != nil {
+		log.Fatal(err)
+	}
+
 	httpServer := &http.Server{
 		Addr:    *addr,
-		Handler: server.New(db).Handler(),
+		Handler: srv.Handler(),
 		// Without this, a client that opens a connection and never finishes its
 		// request headers holds that connection open forever.
 		ReadHeaderTimeout: 10 * time.Second,

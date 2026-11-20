@@ -18,6 +18,9 @@ func newTestServer(t *testing.T) (s *Server, srv *httptest.Server, agentID, secr
 	t.Helper()
 	db := openTestDB(t)
 	s = New(db)
+	if err := s.UseFilesDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	srv = httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 

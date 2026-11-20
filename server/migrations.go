@@ -14,6 +14,19 @@ import (
 var migrations = []string{
 	// M3: the address the server saw the agent connect from (D-29).
 	`ALTER TABLE agents ADD COLUMN wan_addr TEXT NOT NULL DEFAULT ''`,
+
+	// M4: files uploaded to the server, to be sent to hosts. The bytes are on
+	// disk under data/files/<sha256>; this table is the list of names. The id is
+	// what a transfer refers to. No foreign key on uploaded_by: the record of who
+	// uploaded something must outlive that user.
+	`CREATE TABLE files (
+		id          TEXT PRIMARY KEY,
+		name        TEXT NOT NULL,
+		size        INTEGER NOT NULL,
+		sha256      TEXT NOT NULL,
+		uploaded_by INTEGER NOT NULL,
+		created_at  INTEGER NOT NULL
+	)`,
 }
 
 // migrate brings the database up to date. It runs every time the server (or a

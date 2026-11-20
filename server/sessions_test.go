@@ -213,9 +213,9 @@ func TestOpenSessionChecksPermissions(t *testing.T) {
 	if code, _ := openSession(t, w.clients["root"], w.srv, w.hosts["lab-01"], shellRequest(80, 24)); code != http.StatusConflict {
 		t.Errorf("offline host: status = %d, want 409", code)
 	}
-	// Only shells exist so far.
-	if code, _ := openSession(t, w.clients["root"], w.srv, web, map[string]any{"kind": "files"}); code != http.StatusBadRequest {
-		t.Errorf("kind files: status = %d, want 400", code)
+	// Shells and file managers exist so far. A tunnel (M5) does not.
+	if code, _ := openSession(t, w.clients["root"], w.srv, web, map[string]any{"kind": "tunnel"}); code != http.StatusBadRequest {
+		t.Errorf("kind tunnel: status = %d, want 400", code)
 	}
 
 	// Opening is audited: who, which host.
@@ -227,6 +227,81 @@ func TestOpenSessionChecksPermissions(t *testing.T) {
 	}
 	if !found {
 		t.Error("no session_open entry for alice on web-01 in the audit log")
+	}
+}
+
+// A files session is allowed with the files_read permission, and the agent is
+// told whether the user may also change files. A viewer gets a read-only one.
+func TestOpenFilesSession(t *testing.T) {
+	w := newPermWorld(t)
+	web := w.hosts["web-01"]
+	control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+
+	type filesReply struct {
+		ID       string `json:"id"`
+		Readonly bool   `json:"readonly"`
+	}
+	// The browser may send params, but they must not matter: the server decides.
+	body := map[string]any{"kind": "files", "params": map[string]any{"readonly": false}}
+
+	cases := []struct {
+		who          string
+		wantStatus   int
+		wantReadonly bool
+	}{
+		{"alice", http.StatusCreated, false}, // operator: read and write
+		{"root", http.StatusCreated, false},  // admin
+		{"bob", http.StatusCreated, true},    // viewer: read only, whatever the browser asked for
+		{"carol", http.StatusNotFound, false},
+		{"dave", http.StatusNotFound, false},
+	}
+	for _, c := range cases {
+		var reply filesReply
+		code := sendJSON(t, w.clients[c.who], w.srv, "POST", "/api/hosts/"+web+"/sessions", body, &reply)
+		if code != c.wantStatus {
+			t.Errorf("%s: status = %d, want %d", c.who, code, c.wantStatus)
+			continue
+		}
+		if code != http.StatusCreated {
+			continue
+		}
+		if reply.Readonly != c.wantReadonly {
+			t.Errorf("%s: readonly in the reply = %v, want %v", c.who, reply.Readonly, c.wantReadonly)
+		}
+
+		// What the agent is told must say the same.
+		open := readOpen(t, control)
+		var params protocol.FilesParams
+		if err := json.Unmarshal(open.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		if open.Kind != protocol.KindFiles || open.SessionID != reply.ID || params.ReadOnly != c.wantReadonly {
+			t.Errorf("%s: the agent got %+v with %+v, want a files session with readonly=%v", c.who, open, params, c.wantReadonly)
+		}
+	}
+
+	// The viewer can attach his own files session: files_read is enough for that.
+	var reply filesReply
+	if code := sendJSON(t, w.clients["bob"], w.srv, "POST", "/api/hosts/"+web+"/sessions", map[string]any{"kind": "files"}, &reply); code != http.StatusCreated {
+		t.Fatalf("bob opening a files session: status = %d", code)
+	}
+	readOpen(t, control)
+	browser, _, err := dialBrowserSession(w.srv, w.clients["bob"], reply.ID, w.srv.URL)
+	if err != nil {
+		t.Fatalf("a viewer could not attach a files session: %v", err)
+	}
+	browser.CloseNow()
+
+	// The audit entry says what kind of session and whether it can write.
+	var details []string
+	for _, r := range auditRows(t, w.s.db) {
+		if r.Action == "session_open" {
+			details = append(details, r.Detail)
+		}
+	}
+	want := []string{"kind=files readonly=false", "kind=files readonly=false", "kind=files readonly=true", "kind=files readonly=true"}
+	if strings.Join(details, "|") != strings.Join(want, "|") {
+		t.Errorf("session_open details = %v, want %v", details, want)
 	}
 }
 

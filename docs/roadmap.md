@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M3**
+**Active milestone: M6**
 
 ---
 
@@ -42,27 +42,28 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 **Done when:** without login, every `/api/*` returns 401. A viewer cannot see hosts outside their groups. Every action above appears in the audit log.
 
 ## M3 — Web terminal (B1)
-- [ ] `POST /api/hosts/{id}/sessions` + the `open` message
-- [ ] Relay: pair browser WS ⇄ agent WS, 15-second timeout
-- [ ] Agent: shell in a PTY, resize
-- [ ] Terminal page with xterm.js (vendored)
+- [x] `POST /api/hosts/{id}/sessions` + the `open` message
+- [x] Relay: pair browser WS ⇄ agent WS, 15-second timeout
+- [x] Agent: shell in a PTY, resize
+- [x] Terminal page with xterm.js (vendored)
 - [x] Hosts row: Shell action
 - [x] WAN address (seen by server)
 
 **Done when:** `htop` and `vim` on the VM work normally from the browser, resizing the window resizes the terminal, and closing the tab kills the shell process on the host.
 
 ## M4 — File manager & bulk file send (B2, B3)
-- [ ] `files` session: list, mkdir, rename, delete, stat
-- [ ] Download from a host (`download` session → HTTP response)
-- [ ] Upload to the server + `POST /api/transfers` + `fetch` on the agent (`.part` → check sha256 → rename)
-- [ ] File manager page + "Send to multiple hosts" dialog
+- [x] `files` session: list, mkdir, rename, delete, stat
+- [x] Download from a host (`download` session → HTTP response)
+- [x] Upload to the server + `POST /api/transfers` + `fetch` on the agent (`.part` → check sha256 → rename)
+- [x] File manager page + "Send to multiple hosts" dialog
+- [x] File change audit (D-37): the agent reports each mkdir/rename/delete, the server audits it under the session's user
 
 **Done when:** the K3s Manager binary (~15 MB) is sent to 3 hosts at once with mode `0755`, with status visible per host, and a 1 GB file downloads without the server's RAM spiking.
 
 ## M5 — TCP tunnel / port forward (B6)
-- [ ] `tunnel` session in the agent
-- [ ] `hnctl login`, `hnctl forward 2222:<host>:127.0.0.1:22`
-- [ ] Host list via `hnctl hosts`
+- [x] `tunnel` session in the agent
+- [x] `hnctl login`, `hnctl forward 2222:<host>:127.0.0.1:22`
+- [x] Host list via `hnctl hosts`
 
 **Done when:** `ssh -p 2222 root@localhost` from the laptop logs into a VM behind NAT.
 

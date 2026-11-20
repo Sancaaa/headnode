@@ -143,6 +143,9 @@ func newPermWorld(t *testing.T) *permWorld {
 	t.Helper()
 	db := openTestDB(t)
 	s := New(db)
+	if err := s.UseFilesDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 
@@ -285,6 +288,14 @@ func TestHostVisibility(t *testing.T) {
 			}
 			if h.CanShell != allowed {
 				t.Errorf("%s: can_shell for %s = %v, but can(shell) = %v", who, h.Name, h.CanShell, allowed)
+			}
+			// The same for sending files: the Send dialog lists hosts by this flag.
+			canWrite, err := w.s.can(w.user(t, who), w.hosts[h.Name], actionFilesWrite)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.CanFilesWrite != canWrite {
+				t.Errorf("%s: can_files_write for %s = %v, but can(files_write) = %v", who, h.Name, h.CanFilesWrite, canWrite)
 			}
 		}
 

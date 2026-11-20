@@ -22,6 +22,30 @@ func TestClampSize(t *testing.T) {
 	}
 }
 
+func TestParseTunnelTarget(t *testing.T) {
+	// The whole 127.0.0.0/8 range is this machine, so 127.1.2.3 is fine.
+	good := []string{"127.0.0.1:22", "localhost:5432", "127.1.2.3:80", "[::1]:8080", "127.0.0.1:65535"}
+	for _, in := range good {
+		if got, err := ParseTunnelTarget(in); err != nil || got != in {
+			t.Errorf("ParseTunnelTarget(%q) = %q, %v, want it accepted unchanged", in, got, err)
+		}
+	}
+
+	// Everything that is not "a port on this machine" is refused: malformed
+	// targets, a machine on the LAN (10.x, the router), any name except
+	// localhost (also one that only looks like it), "any address" 0.0.0.0, a
+	// link-local neighbor, and the cloud metadata address.
+	for _, in := range []string{
+		"", "127.0.0.1", ":22", "127.0.0.1:", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:ssh", "127.0.0.1:-1",
+		"10.0.0.5:22", "192.168.1.1:80", "example.com:443", "localhost.evil.com:22",
+		"0.0.0.0:22", "[fe80::1]:22", "169.254.169.254:80",
+	} {
+		if got, err := ParseTunnelTarget(in); err == nil {
+			t.Errorf("ParseTunnelTarget(%q) accepted it as %q", in, got)
+		}
+	}
+}
+
 // The open message must keep params as raw JSON, so each kind can define its
 // own shape (docs/protocol.md §3).
 func TestOpenMessageRoundTrip(t *testing.T) {

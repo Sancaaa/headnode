@@ -226,6 +226,13 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		s.agents.remove(agentID, me)
 		s.touch(agentID) // last_seen_at = the moment it went offline
 		slog.Info("agent offline", "agent_id", agentID)
+
+		// A host that is gone cannot report how its file transfers went. But if
+		// it only reconnected (this connection was replaced, D-17), it is still
+		// online, and its transfers may well finish.
+		if online, _ := s.agents.status(agentID); !online {
+			s.transfers.failPending(agentID, "the host disconnected before it reported a result")
+		}
 	}()
 
 	for {
@@ -270,6 +277,20 @@ func (s *Server) handleControlMessage(agentID string, me *onlineAgent, data []by
 		}
 		s.agents.setHeartbeat(me, hb)
 		s.touch(agentID)
+	case protocol.TypeFetchResult:
+		var res protocol.FetchResult
+		if err := json.Unmarshal(env.Data, &res); err != nil {
+			slog.Warn("bad fetch result", "agent_id", agentID, "err", err)
+			return
+		}
+		s.finishTransfer(agentID, res)
+	case protocol.TypeFileChange:
+		var change protocol.FileChange
+		if err := json.Unmarshal(env.Data, &change); err != nil {
+			slog.Warn("bad file change report", "agent_id", agentID, "err", err)
+			return
+		}
+		s.recordFileChange(agentID, change)
 	default:
 		slog.Warn("unknown control message", "agent_id", agentID, "type", env.Type)
 	}

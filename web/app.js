@@ -42,11 +42,41 @@ function icon(pathData) {
 }
 const ICON_HOSTS = 'M3.5 3h9A1.5 1.5 0 0 1 14 4.5v5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 9.5v-5A1.5 1.5 0 0 1 3.5 3zM5.5 14h5M8 11v3';
 const ICON_USERS = 'M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 14c.6-2.6 2.6-4 5-4s4.4 1.4 5 4';
-const ICON_AUDIT = 'M3.5 2.5h9v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3';
+// Pictures for the file manager's toolbar and file actions. Each is one SVG path
+// in the same 16x16 box as the sidebar icons.
+const ICON_BACK = 'M13 8H3M7 4L3 8l4 4';
+const ICON_REFRESH = 'M2.5 8a5.5 5.5 0 0 1 9.4-3.9L13.5 5.7M13.5 2.5v3.2h-3.2M13.5 8a5.5 5.5 0 0 1-9.4 3.9L2.5 10.3M2.5 13.5v-3.2h3.2';
+const ICON_FOLDER = 'M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z';
+const ICON_NEW_FOLDER ='M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5zM8 7v4M6 9h4';
+const ICON_UPLOAD = 'M8 11V3M4.5 6.5L8 3l3.5 3.5M3 13h10';
+const ICON_DOWNLOAD = 'M8 3v8M4.5 7.5L8 11l3.5-3.5M3 13h10';
+const ICON_RENAME = 'M3 13l.7-3L10.5 3.2a1.4 1.4 0 0 1 2 2L5.7 12.3zM9.5 4.2l2.3 2.3';
+const ICON_DELETE = 'M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4';
+const ICON_CHEVRON = 'M6 3l5 5-5 5';
+const ICON_TRANSFERS ='M5 2v12M2 5l3-3 3 3M11 14V2M8 11l3 3 3-3';
+const ICON_AUDIT ='M3.5 2.5h9v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3';
 const ICON_GROUPS ='M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c.4-2 1.9-3 4-3s3.6 1 4 3M11 7a1.7 1.7 0 1 0 0-3.4M11.5 10c1.6.1 2.5 1 2.8 3';
 
 function button(label, className, onClick) {
   const b = h('button', { class: className, type: 'button' }, label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+// A toolbar button with a small picture in front of its label.
+function iconButton(label, pathData, onClick) {
+  const b = h('button', { class: 'btn', type: 'button' }, icon(pathData), label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+// A button that is only a picture, for actions that repeat on every row. The
+// words move to the tooltip and to the accessible name, so a screen reader
+// still says "Delete".
+function iconOnly(label, pathData, onClick, extraClass) {
+  const b = h('button', {
+    class: 'icon-button' + (extraClass ? ' ' + extraClass : ''), type: 'button', title: label, 'aria-label': label,
+  }, icon(pathData));
   b.addEventListener('click', onClick);
   return b;
 }
@@ -106,6 +136,8 @@ function hostLink(id) {
   return '#/hosts/' + id;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function count(n, singular, plural) {
   return n + ' ' + (n === 1 ? singular : plural);
 }
@@ -151,6 +183,34 @@ async function api(method, path, body) {
     refresh();
   }
   return { ok: resp.ok, status: resp.status, data };
+}
+
+// Uploads one file to the server (protocol.md §1) and reports progress as a
+// fraction from 0 to 1. fetch() cannot report how much of an upload has been
+// sent, XMLHttpRequest can. It resolves with the same shape api() does.
+function uploadFile(file, onProgress) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/files');
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (err) { /* not JSON: data stays null */ }
+      if (xhr.status === 401) { // the session ended, like in api()
+        me = null;
+        routeId++;
+        lastKey = null;
+        refresh();
+      }
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, data });
+    };
+    xhr.onerror = () => resolve({ ok: false, status: 0, data: { error: 'Cannot reach the server.' } });
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
+  });
 }
 
 function errorText(result) {
@@ -204,8 +264,13 @@ function openDialog({ title, fields, submitLabel, cancelLabel = 'Cancel', danger
   // However it was closed (Done, Cancel, Esc), show the latest data.
   dlg.addEventListener('close', () => {
     dlg.remove();
-    lastKey = null;
-    refresh();
+    // Show the latest data. A static page (the terminal, the file manager) keeps
+    // its own state, and rebuilding it would throw away its session, so it
+    // refreshes itself after a change instead.
+    if (!currentRoute().static) {
+      lastKey = null;
+      refresh();
+    }
   });
 
   document.body.append(dlg);
@@ -282,7 +347,7 @@ function hostRow(host) {
       h('div', { class: 'sub' }, 'WAN: ' + (host.wan_addr || '—'))),
     h('td', { class: 'col-usage num' }, usageSummary(host)),
     h('td', {}, statusText(host)),
-    h('td', { class: 'col-act' }, shellButton(host)));
+    h('td', { class: 'col-act' }, filesButton(host), shellButton(host)));
 
   // The whole row is clickable. The name is a real link too, so the page
   // still works from the keyboard.
@@ -313,6 +378,18 @@ function shellButton(host) {
   // The whole row opens the host page when clicked. Do not let this click also
   // reach the row, or the row would send the browser to the host page instead.
   link.addEventListener('click', (event) => event.stopPropagation());
+  return link;
+}
+
+// The Files button on a host's row. Every role in a group may browse files
+// (files_read), and a host is only listed to people who have a role in its
+// group or are admins, so no permission flag is needed: the button only needs
+// the host to be online, because a files session needs the agent. What the
+// person may then do is decided by the session itself (read-only or not).
+function filesButton(host) {
+  if (!host.online) return null;
+  const link = h('a', { class: 'btn btn-small', href: filesHref(host.id) }, icon(ICON_FOLDER), 'Files');
+  link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
 }
 
@@ -511,23 +588,32 @@ function deleteHostDialog(host) {
 
 // ------------------------------------------------------------ Terminal page
 
-// Unlike the other pages, the terminal is not redrawn every 2 seconds: that
-// would destroy it. Its route is "static" (see refresh), and leaving the page
-// disposes of it here.
-let terminalSession = null; // { dispose() } of the terminal on screen
+// Unlike the other pages, the terminal and the file manager are not redrawn
+// every 2 seconds: that would destroy them. Their routes are "static" (see
+// refresh), and leaving the page disposes of what they hold here.
+let pageSession = null; // { dispose() } of the terminal or file manager on screen
 
-function disposeTerminal() {
-  if (terminalSession) {
-    terminalSession.dispose();
-    terminalSession = null;
+function disposePage() {
+  if (pageSession) {
+    pageSession.dispose();
+    pageSession = null;
   }
+}
+
+// The browser's end of a session: a WebSocket to the server, which pairs it
+// with the agent's end (protocol.md §4). The browser sends its login cookie
+// and an Origin header by itself, and the server checks both.
+function openSocket(sessionId) {
+  const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  return new WebSocket(scheme + location.host + '/ui/sessions/' + sessionId);
 }
 
 // Overview | Terminal, on both pages of a host (design.md §6).
 function hostTabs(host, active) {
   return h('nav', { class: 'tabs' },
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
-    h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'));
+    h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
+    h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'));
 }
 
 function renderTerminalPage(host) {
@@ -610,8 +696,7 @@ function mountTerminal(host, box, status, reconnect) {
       return;
     }
 
-    const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    ws = new WebSocket(scheme + location.host + '/ui/sessions/' + result.data.id);
+    ws = openSocket(result.data.id);
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       status.textContent = 'Connected';
@@ -633,7 +718,7 @@ function mountTerminal(host, box, status, reconnect) {
     connect();
   });
 
-  terminalSession = {
+  pageSession = {
     dispose() {
       disposed = true;
       observer.disconnect();
@@ -641,6 +726,442 @@ function mountTerminal(host, box, status, reconnect) {
       // relay passes the close on and the agent kills the shell.
       if (ws) ws.close(1000);
       term.dispose();
+    },
+  };
+  connect();
+}
+
+// -------------------------------------------------------------- Files page
+
+function filesHref(hostId) {
+  return hostLink(hostId) + '/files';
+}
+
+function joinPath(dir, name) {
+  return dir === '/' ? '/' + name : dir + '/' + name;
+}
+
+function renderFilesPage(host) {
+  document.title = host.name + ' · headnode';
+  const page = [
+    h('a', { class: 'back', href: '#/' }, '← Hosts'),
+    pageHead(host.name, null),
+    h('div', { class: 'status' }, statusText(host)),
+    hostTabs(host, 'files'),
+  ];
+  if (!host.online) {
+    page.push(h('div', { class: 'notice' },
+      'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
+    return page;
+  }
+  const box = h('div', { class: 'files' });
+  page.push(box);
+  // Like the terminal: built once the box is on the page, and never redrawn by the poll.
+  queueMicrotask(() => mountFiles(host, box));
+  return page;
+}
+
+// The file manager talks to the agent over one session WebSocket. It sends a
+// JSON request with an id, and the agent answers with the same id (protocol.md
+// §4), so several requests can be in flight and each answer finds its caller.
+function mountFiles(host, box) {
+  let ws = null;
+  let disposed = false;
+  let readonly = true;  // until the server says otherwise
+  let dir = null;       // the folder on show
+  let nextId = 1;
+  const pending = new Map(); // request id -> { resolve, reject }
+  const backStack = [];      // the folders visited before this one, for the Back button
+  let openMenu = null;       // the folder list under a ">" of the path bar: { el, owner }
+
+  // The path bar works like the Explorer's address bar. Every folder of the path
+  // is a button that goes there, and the ">" after it lists the folders inside
+  // it. Clicking the empty part of the bar turns it into a box you can type in.
+  const crumbs = h('div', { class: 'crumbs' });
+  const crumbsBox = h('div', { class: 'crumbs-wrap' }, crumbs);
+  const backButton = iconButton('Back', ICON_BACK, goBack);
+  backButton.disabled = true; // nothing to go back to yet
+  const reloadButton = iconButton('Refresh', ICON_REFRESH, () => { if (dir) load(dir); });
+  const newFolder = iconButton('New folder', ICON_NEW_FOLDER, () => newFolderDialog());
+  newFolder.hidden = true; // shown once we know this session may change files
+  const uploadButton = iconButton('Upload', ICON_UPLOAD, () => uploadDialog());
+  uploadButton.hidden = true;
+  const reconnect = h('button', { class: 'btn', type: 'button', hidden: '' }, 'Reconnect');
+  const bar = h('div', { class: 'path-bar' }, backButton, crumbsBox, reloadButton, newFolder, uploadButton, reconnect);
+  const message = h('div', { class: 'files-message sub' });
+  const listing = h('div');
+  box.replaceChildren(bar, message, listing);
+
+  crumbs.addEventListener('click', (event) => {
+    // Only a click on the empty part counts: the folder buttons do their own thing.
+    if (dir !== null && (event.target === crumbs || event.target.classList.contains('crumb-fill'))) editPath();
+  });
+  // A click anywhere else, or Escape, closes the folder list.
+  const onPointerDown = (event) => {
+    if (openMenu && !openMenu.el.contains(event.target) && !event.target.closest('.crumb-chevron')) closeMenu();
+  };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') closeMenu();
+  };
+  document.addEventListener('mousedown', onPointerDown);
+  document.addEventListener('keydown', onKeyDown);
+
+  // Draws "/ > home > sanca >": each name goes to that folder, each ">" lists the
+  // folders inside the folder before it, so you can jump sideways in two clicks.
+  function drawCrumbs() {
+    closeMenu();
+    const names = dir === '/' ? [] : dir.split('/').filter(Boolean);
+    const parts = [];
+    let path = '/';
+    const add = (label, target) => {
+      parts.push(button(label, 'crumb', () => load(target)));
+      const chevron = h('button', { class: 'crumb-chevron', type: 'button', 'aria-label': 'Folders in ' + target }, icon(ICON_CHEVRON));
+      chevron.addEventListener('click', () => showChildren(target, chevron));
+      parts.push(chevron);
+    };
+    add('/', '/');
+    for (const name of names) {
+      path = joinPath(path, name);
+      add(name, path);
+    }
+    crumbs.replaceChildren(...parts, h('div', { class: 'crumb-fill', title: 'Click to type a path' }));
+    crumbs.scrollLeft = crumbs.scrollWidth; // a long path shows its end, where you are
+  }
+
+  function closeMenu() {
+    if (openMenu) {
+      openMenu.el.remove();
+      openMenu = null;
+    }
+  }
+
+  // The folder list under a ">". The names come from the host's disk, so they are
+  // text like everything else (D-19).
+  async function showChildren(target, chevron) {
+    if (openMenu && openMenu.owner === chevron) { // a second click on the same ">" closes it
+      closeMenu();
+      return;
+    }
+    closeMenu();
+    const menu = h('div', { class: 'menu', role: 'menu' }, h('div', { class: 'menu-note sub' }, 'Loading…'));
+    // Right under the ">" that opened it.
+    menu.style.left = Math.max(0, chevron.getBoundingClientRect().left - crumbsBox.getBoundingClientRect().left) + 'px';
+    crumbsBox.append(menu);
+    openMenu = { el: menu, owner: chevron };
+
+    const result = await attempt('list', { path: target });
+    if (!openMenu || openMenu.el !== menu) return; // it was closed while we waited
+    if (!result.ok) {
+      menu.replaceChildren(h('div', { class: 'menu-note danger' }, errorText(result)));
+      return;
+    }
+    const folders = (result.data.entries || []).filter((entry) => entry.is_dir)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    menu.replaceChildren(...(folders.length === 0
+      ? [h('div', { class: 'menu-note sub' }, 'No folders')]
+      : folders.map((entry) => button(entry.name, 'menu-item', () => {
+        closeMenu();
+        load(joinPath(target, entry.name));
+      }))));
+  }
+
+  // The bar as a text box: type or paste a path, Enter goes there, Escape or
+  // clicking away puts the folder buttons back.
+  function editPath() {
+    closeMenu();
+    const input = h('input', {
+      class: 'path-edit', value: dir, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Folder path',
+    });
+    crumbs.replaceChildren(input);
+    input.focus();
+    input.select();
+    let finished = false;
+    const finish = (go) => {
+      if (finished) return; // Enter, then the blur that removing the box causes
+      finished = true;
+      if (go) load(input.value);
+      drawCrumbs(); // if the folder cannot be listed, the old path stays
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === 'Escape') {
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(false));
+  }
+
+  // Back goes to the folder you were in before, not to the parent folder, like
+  // the Back button of a browser: from /home, after coming from /home/sanca, it
+  // returns to /home/sanca.
+  function goBack() {
+    const previous = backStack.pop();
+    backButton.disabled = backStack.length === 0;
+    if (previous) load(previous, false);
+  }
+
+  // Send one request and wait for its answer.
+  function request(op, fields) {
+    return new Promise((resolve, reject) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('Not connected.'));
+        return;
+      }
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, op, ...fields }));
+    });
+  }
+
+  // Like request, but never throws: the result has the same shape api() gives
+  // (ok, data), so the dialogs and errorText() work with it unchanged.
+  async function attempt(op, fields) {
+    try {
+      const reply = await request(op, fields);
+      if (reply.ok) return { ok: true, data: reply };
+      return { ok: false, status: 0, data: { error: reply.error || 'The request failed.' } };
+    } catch (err) {
+      return { ok: false, status: 0, data: { error: err.message } };
+    }
+  }
+
+  // Shows a folder. record is false when going Back, which must not add to the
+  // history it is walking through.
+  async function load(target, record = true) {
+    // "/etc/" and "/etc" are the same folder.
+    const wanted = target.trim().replace(/\/+$/, '') || '/';
+    const result = await attempt('list', { path: wanted });
+    if (disposed) return;
+    if (!result.ok) {
+      message.textContent = errorText(result);
+      return;
+    }
+    if (record && dir !== null && dir !== wanted) backStack.push(dir); // reloading the same folder is not a move
+    dir = wanted;
+    backButton.disabled = backStack.length === 0;
+    drawCrumbs();
+    const entries = result.data.entries || [];
+    message.textContent = result.data.truncated
+      ? 'This folder has more entries than can be shown. Showing the first ' + entries.length + '.'
+      : (readonly ? 'Read-only: you can browse and download files here, but not change them.' : '');
+    draw(entries);
+  }
+
+  function draw(entries) {
+    // Folders first, then by name.
+    const sorted = [...entries].sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
+    if (sorted.length === 0) {
+      listing.replaceChildren(h('div', { class: 'empty small' }, 'This folder is empty.'));
+      return;
+    }
+    listing.replaceChildren(h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Name'),
+        h('th', {}, 'Size'),
+        h('th', {}, 'Modified'),
+        h('th', {}, 'Mode'),
+        h('th', { class: 'col-act' }, 'Action'))),
+      h('tbody', {}, sorted.map(row))));
+  }
+
+  function row(entry) {
+    // Names come from the host's disk, so like everything else they are shown
+    // as text (D-19). A folder is a button that opens it.
+    const name = entry.is_dir
+      ? button(entry.name + '/', 'link-button name', () => load(joinPath(dir, entry.name)))
+      : h('span', { class: 'name' }, entry.name);
+    const actions = [];
+    // Anyone who can browse can download a file, read-only or not. It is a plain
+    // link: the browser's own download manager shows progress and saves the file,
+    // and the server streams it from the host (protocol.md §1).
+    // The actions are pictures only; the words are in the tooltips.
+    if (!entry.is_dir) {
+      actions.push(h('a', {
+        class: 'icon-button',
+        href: '/api/hosts/' + host.id + '/download?path=' + encodeURIComponent(joinPath(dir, entry.name)),
+        download: '',
+        title: 'Download',
+        'aria-label': 'Download',
+      }, icon(ICON_DOWNLOAD)));
+    }
+    if (!readonly) {
+      actions.push(
+        iconOnly('Rename', ICON_RENAME, () => renameDialog(entry)),
+        iconOnly('Delete', ICON_DELETE, () => deleteDialog(entry), 'danger-text'));
+    }
+    return h('tr', { class: 'static' },
+      h('td', {}, name, entry.is_link ? h('span', { class: 'tag' }, 'link') : null),
+      h('td', { class: 'num sub' }, entry.is_dir ? '' : formatBytes(entry.size)),
+      h('td', { class: 'sub', title: new Date(entry.mod_time).toLocaleString() }, relativeTime(entry.mod_time)),
+      h('td', { class: 'mono sub' }, entry.mode),
+      h('td', { class: 'col-act' }, actions));
+  }
+
+  // Upload to this host, in two steps (D-03): the file goes to the server once,
+  // then the host is told to fetch it. The host answers when the file is in
+  // place, and until then this waits and shows where it is.
+  function uploadDialog() {
+    const file = h('input', { class: 'input', type: 'file', name: 'file', required: '' });
+    const mode = h('input', {
+      class: 'input', name: 'mode', value: '0644', required: '', autocomplete: 'off', pattern: '0?[0-7]{3}',
+    });
+    const status = h('div', { class: 'sub' });
+    openDialog({
+      title: 'Upload file',
+      fields: [
+        h('p', { class: 'sub' }, 'The file goes to the server first, then ' + host.name + ' fetches it into ' +
+          dir + '. A file with the same name is replaced.'),
+        field('File', file),
+        field('Mode (0644 for a normal file, 0755 for a program)', mode),
+        status,
+      ],
+      submitLabel: 'Upload',
+      onSubmit: async () => {
+        const chosen = file.files[0];
+        if (!chosen) return 'Choose a file.';
+
+        status.textContent = 'Uploading to the server… 0%';
+        const stored = await uploadFile(chosen, (fraction) => {
+          status.textContent = 'Uploading to the server… ' + Math.round(fraction * 100) + '%';
+        });
+        if (!stored.ok) return errorText(stored);
+
+        status.textContent = host.name + ' is fetching the file…';
+        const created = await api('POST', '/api/transfers', {
+          file_id: stored.data.id,
+          agent_ids: [host.id],
+          dest_path: joinPath(dir, chosen.name),
+          mode: mode.value.trim(),
+        });
+        if (!created.ok) return errorText(created);
+
+        // The host reports when the file is in place, or why it could not be.
+        for (let i = 0; i < 900; i++) { // about 15 minutes
+          const state = await api('GET', '/api/transfers/' + created.data.id);
+          if (!state.ok) return errorText(state);
+          const result = state.data.hosts[0];
+          if (result.status === 'ok') {
+            load(dir);
+            return null;
+          }
+          if (result.status === 'error') return 'The host could not save the file: ' + result.error;
+          if (disposed) return null;
+          if (i === 15) {
+            // A host answers within moments unless it is busy with a big file, or
+            // its agent is older than file transfers and ignores the request.
+            status.textContent = host.name + ' has not answered yet. If its agent was started before file ' +
+              'transfers existed (the host page shows the agent version, 0.2.0 or newer is needed), ' +
+              'it never will: update and restart the agent.';
+          }
+          await sleep(1000);
+        }
+        return 'The host is still working on it. Refresh the folder in a while to see the file.';
+      },
+    });
+  }
+
+  function newFolderDialog() {
+    const name = h('input', { class: 'input', name: 'name', required: '', autocomplete: 'off' });
+    openDialog({
+      title: 'New folder',
+      fields: [field('Name', name)],
+      submitLabel: 'Create',
+      onSubmit: async () => {
+        const newName = name.value.trim();
+        if (!newName || newName.includes('/')) return 'A name cannot be empty or contain "/".';
+        const result = await attempt('mkdir', { path: joinPath(dir, newName) });
+        if (!result.ok) return errorText(result);
+        load(dir);
+        return null;
+      },
+    });
+  }
+
+  function renameDialog(entry) {
+    const name = h('input', { class: 'input', name: 'name', value: entry.name, required: '', autocomplete: 'off' });
+    openDialog({
+      title: 'Rename',
+      fields: [field('New name', name)],
+      submitLabel: 'Rename',
+      onSubmit: async () => {
+        const newName = name.value.trim();
+        if (!newName || newName.includes('/')) return 'A name cannot be empty or contain "/".';
+        const result = await attempt('rename', { from: joinPath(dir, entry.name), to: joinPath(dir, newName) });
+        if (!result.ok) return errorText(result);
+        load(dir);
+        return null;
+      },
+    });
+  }
+
+  function deleteDialog(entry) {
+    confirmDialog({
+      title: entry.is_dir ? 'Delete folder' : 'Delete file',
+      message: 'Delete "' + entry.name + '"' + (entry.is_dir ? ' and everything inside it' : '') +
+        ' from ' + host.name + '? This cannot be undone.',
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        const result = await attempt('delete', { path: joinPath(dir, entry.name), recursive: entry.is_dir });
+        if (result.ok) load(dir);
+        return result;
+      },
+    });
+  }
+
+  async function connect() {
+    reconnect.hidden = true;
+    message.textContent = 'Connecting…';
+    const result = await api('POST', '/api/hosts/' + host.id + '/sessions', { kind: 'files', params: {} });
+    if (disposed) return;
+    if (!result.ok) {
+      message.textContent = errorText(result);
+      reconnect.hidden = false;
+      return;
+    }
+    readonly = Boolean(result.data.readonly);
+    newFolder.hidden = readonly;
+    uploadButton.hidden = readonly;
+
+    ws = openSocket(result.data.id);
+    ws.onmessage = (event) => {
+      if (typeof event.data !== 'string') return;
+      let reply;
+      try { reply = JSON.parse(event.data); } catch (err) { return; }
+      const waiting = pending.get(reply.id);
+      if (!waiting) return;
+      pending.delete(reply.id);
+      waiting.resolve(reply);
+    };
+    ws.onopen = async () => {
+      message.textContent = '';
+      if (dir === null) {
+        // First time: start in the agent's home folder.
+        const home = await attempt('home');
+        await load(home.ok && home.data.path ? home.data.path : '/');
+      } else {
+        await load(dir, false); // after a reconnect: same folder, not a step in the history
+      }
+    };
+    ws.onclose = () => {
+      if (disposed) return;
+      for (const waiting of pending.values()) waiting.reject(new Error('Not connected.'));
+      pending.clear();
+      message.textContent = 'Not connected.';
+      reconnect.hidden = false;
+    };
+  }
+  reconnect.addEventListener('click', connect);
+
+  pageSession = {
+    dispose() {
+      disposed = true;
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+      for (const waiting of pending.values()) waiting.reject(new Error('Not connected.'));
+      pending.clear();
+      if (ws) ws.close(1000);
     },
   };
   connect();
@@ -831,9 +1352,30 @@ const AUDIT_LABELS = {
   host_rename: 'Host renamed',
   host_move: 'Host moved',
   host_delete: 'Host deleted',
-  session_open: 'Terminal opened',
-  session_close: 'Terminal closed',
+  session_open: 'Session opened',
+  session_close: 'Session closed',
+  file_download: 'File downloaded',
+  file_upload: 'File uploaded',
+  file_mkdir: 'Folder created',
+  file_rename: 'File renamed',
+  file_delete: 'File deleted',
+  transfer_start: 'File send started',
+  transfer_result: 'File send result',
 };
+
+// What a session is called in the log. The server writes the same two actions
+// (session_open, session_close) for every kind of session and puts the kind in
+// the detail ("kind=files readonly=false"), so the page reads it from there.
+const SESSION_KIND_NAMES = { shell: 'Terminal', files: 'Files', tunnel: 'Tunnel' };
+
+function auditLabel(e) {
+  if (e.action === 'session_open' || e.action === 'session_close') {
+    const match = /^kind=(\S+)/.exec(e.detail);
+    const name = match && SESSION_KIND_NAMES[match[1]];
+    if (name) return name + (e.action === 'session_open' ? ' opened' : ' closed');
+  }
+  return AUDIT_LABELS[e.action] || e.action;
+}
 
 const AUDIT_PAGE_SIZE = 200; // the most the server returns in one reply
 
@@ -861,7 +1403,7 @@ function renderAudit(entries) {
       h('td', { class: 'col-time num sub' }, new Date(e.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })),
       h('td', {}, auditUser(e)),
       h('td', {}, auditHost(e)),
-      h('td', { class: 'name' }, AUDIT_LABELS[e.action] || e.action),
+      h('td', { class: 'name' }, auditLabel(e)),
       // The detail can contain text from agents (a hostname), so it is a text
       // node like everything else (D-19).
       h('td', { class: 'sub detail' }, e.detail))))));
@@ -880,6 +1422,170 @@ function auditHost(e) {
   if (e.host_name) return h('a', { href: hostLink(e.agent_id) }, e.host_name);
   if (e.agent_id) return h('span', { class: 'sub mono', title: 'This host no longer exists' }, e.agent_id);
   return h('span', { class: 'sub' }, '—');
+}
+
+// --------------------------------------------------------------- Transfers
+
+// "2 of 3 done, 1 failed, 1 working", for the list and the detail page.
+function transferSummary(hosts) {
+  const done = hosts.filter((host) => host.status === 'ok').length;
+  const failed = hosts.filter((host) => host.status === 'error').length;
+  const working = hosts.length - done - failed;
+  const parts = [done + ' of ' + hosts.length + ' done'];
+  if (failed > 0) parts.push(failed + ' failed');
+  if (working > 0) parts.push(working + ' working');
+  return parts.join(', ');
+}
+
+function renderTransfers(transfers) {
+  const send = me && me.can_upload ? button('Send file', 'btn btn-primary', sendFileDialog) : null;
+  const page = [
+    pageHead('Transfers', 'Send a file to several hosts at once, and follow how each one is doing.', send),
+    h('div', { class: 'pill' }, count(transfers.length, 'transfer', 'transfers')),
+  ];
+  if (transfers.length === 0) {
+    page.push(h('div', { class: 'empty' }, 'No transfers yet. Use "Send file" to put a file on one or more hosts.'));
+    return page;
+  }
+
+  page.push(h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Started'),
+      h('th', {}, 'File'),
+      h('th', {}, 'Destination'),
+      h('th', {}, 'Hosts'),
+      h('th', {}, 'By'))),
+    h('tbody', {}, transfers.map((transfer) => {
+      const failed = transfer.hosts.some((host) => host.status === 'error');
+      const row = h('tr', {},
+        h('td', { class: 'sub', title: new Date(transfer.created_at).toLocaleString() }, relativeTime(transfer.created_at)),
+        h('td', {},
+          h('a', { class: 'name', href: '#/transfers/' + transfer.id }, transfer.file_name),
+          h('div', { class: 'sub' }, formatBytes(transfer.file_size))),
+        h('td', { class: 'mono sub' }, transfer.dest_path),
+        h('td', {}, h('span', { class: failed ? 'danger' : '' }, transferSummary(transfer.hosts))),
+        h('td', { class: 'sub' }, transfer.started_by));
+      row.addEventListener('click', () => { location.hash = '#/transfers/' + transfer.id; });
+      return row;
+    }))));
+  return page;
+}
+
+// One transfer, host by host. This page is redrawn by the poll like the others,
+// so the statuses move from "Fetching…" to "Done" by themselves.
+function renderTransfer(transfer) {
+  document.title = transfer.file_name + ' · headnode';
+  const working = transfer.hosts.some((host) => host.status === 'pending');
+
+  const hostRows = transfer.hosts.map((host) => {
+    let status;
+    if (host.status === 'ok') status = h('span', {}, h('span', { class: 'dot' }), 'Done');
+    else if (host.status === 'error') status = h('span', { class: 'danger' }, 'Failed');
+    else status = h('span', { class: 'sub' }, 'Fetching…');
+
+    const name = host.host_name
+      ? h('a', { class: 'name', href: hostLink(host.agent_id) }, host.host_name)
+      : h('span', { class: 'sub', title: host.agent_id }, 'Deleted host');
+    return h('tr', { class: 'static' },
+      h('td', {}, name),
+      h('td', {}, status),
+      h('td', { class: 'sub' }, host.error || ''));
+  });
+
+  const facts = [
+    ['Destination', h('span', { class: 'mono' }, transfer.dest_path)],
+    ['Mode', h('span', { class: 'mono' }, transfer.mode)],
+    ['Size', formatBytes(transfer.file_size)],
+    ['Started', new Date(transfer.created_at).toLocaleString()],
+    ['Started by', transfer.started_by],
+  ];
+  return [
+    h('a', { class: 'back', href: '#/transfers' }, '← Transfers'),
+    pageHead(transfer.file_name, transferSummary(transfer.hosts) + (working ? '. This page updates by itself.' : '.')),
+    h('h2', {}, 'Hosts'),
+    h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Host'), h('th', {}, 'Status'), h('th', {}, 'Details'))),
+      h('tbody', {}, hostRows)),
+    h('h2', {}, 'Details'),
+    h('dl', { class: 'facts' }, facts.map(([label, value]) => [h('dt', {}, label), h('dd', {}, value)])),
+  ];
+}
+
+// "Send file": upload once, then every chosen host fetches it (D-03). Only hosts
+// the server says we may write to are listed, and offline ones are shown but
+// cannot be picked: a transfer to a host that is not there fails at once.
+async function sendFileDialog() {
+  const hosts = await loadList('/api/hosts');
+  if (!hosts) return;
+  const targets = hosts.filter((host) => host.can_files_write);
+  if (targets.length === 0) {
+    messageDialog('Send file', 'There are no hosts you may send files to. You need the operator role in a group that has hosts.');
+    return;
+  }
+
+  const file = h('input', { class: 'input', type: 'file', name: 'file', required: '' });
+  const folder = h('input', { class: 'input', name: 'folder', value: '/tmp', required: '', autocomplete: 'off', spellcheck: 'false' });
+  const name = h('input', { class: 'input', name: 'name', required: '', autocomplete: 'off', spellcheck: 'false' });
+  file.addEventListener('change', () => {
+    if (file.files[0]) name.value = file.files[0].name; // start with the file's own name
+  });
+  const mode = h('input', {
+    class: 'input', name: 'mode', value: '0644', required: '', autocomplete: 'off', pattern: '0?[0-7]{3}',
+  });
+
+  const choices = targets.map((host) => ({
+    host,
+    box: h('input', { type: 'checkbox', value: host.id, disabled: host.online ? null : '' }),
+  }));
+  const picker = h('div', { class: 'host-picker' }, choices.map(({ host, box }) =>
+    h('label', { class: 'check' }, box, host.name,
+      h('span', { class: 'sub' }, [host.group_name || 'No group', host.online ? 'online' : 'offline'].join(' · ')))));
+  const selectAll = button('Select all online', 'link-button', () => {
+    for (const { box } of choices) if (!box.disabled) box.checked = true;
+  });
+  const status = h('div', { class: 'sub' });
+
+  openDialog({
+    title: 'Send file to hosts',
+    fields: [
+      h('p', { class: 'sub' }, 'The file goes to the server once, then every host you pick fetches it, checks it, and puts it in place. A file with the same name is replaced.'),
+      field('File', file),
+      field('Folder on each host (must exist)', folder),
+      field('Save as', name),
+      field('Mode (0644 for a normal file, 0755 for a program)', mode),
+      h('div', { class: 'field' }, h('span', {}, 'Hosts'), picker, selectAll),
+      status,
+    ],
+    submitLabel: 'Send',
+    onSubmit: async () => {
+      const chosen = file.files[0];
+      if (!chosen) return 'Choose a file.';
+      const dir = folder.value.trim().replace(/\/+$/, '') || '/';
+      if (!dir.startsWith('/')) return 'The folder must be an absolute path, starting with /.';
+      const fileName = name.value.trim();
+      if (!fileName || fileName.includes('/')) return 'The file name cannot be empty or contain "/".';
+      const selected = choices.filter(({ box }) => box.checked).map(({ host }) => host.id);
+      if (selected.length === 0) return 'Pick at least one host.';
+
+      status.textContent = 'Uploading to the server… 0%';
+      const stored = await uploadFile(chosen, (fraction) => {
+        status.textContent = 'Uploading to the server… ' + Math.round(fraction * 100) + '%';
+      });
+      if (!stored.ok) return errorText(stored);
+
+      status.textContent = 'Starting…';
+      const created = await api('POST', '/api/transfers', {
+        file_id: stored.data.id,
+        agent_ids: selected,
+        dest_path: joinPath(dir, fileName),
+        mode: mode.value.trim(),
+      });
+      if (!created.ok) return errorText(created);
+
+      location.hash = '#/transfers/' + created.data.id; // follow it host by host
+      return null;
+    },
+  });
 }
 
 // ------------------------------------------------------------ login & sidebar
@@ -950,6 +1656,8 @@ function renderNav() {
     h('a', { href, class: href === active ? 'active' : null }, icon(iconPath), label);
 
   const items = [link('#/', 'Hosts', ICON_HOSTS)];
+  // Not an admin page: anyone who may send files has something to do here.
+  if (me && me.can_upload) items.push(link('#/transfers', 'Transfers', ICON_TRANSFERS));
   if (isAdmin()) {
     items.push(
       h('div', { class: 'nav-label' }, 'Admin'),
@@ -998,10 +1706,13 @@ const routes = [
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)$/, url: (m) => '/api/hosts/' + m[1], render: renderHost, nav: '#/', title: 'Host' },
   // static: drawn once per visit, never by the 2-second poll (see refresh).
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/terminal$/, url: (m) => '/api/hosts/' + m[1], render: renderTerminalPage, nav: '#/', title: 'Terminal', static: true },
+  { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/files$/, url: (m) => '/api/hosts/' + m[1], render: renderFilesPage, nav: '#/', title: 'Files', static: true },
   { pattern: /^#\/users$/, url: () => '/api/users', render: renderUsers, nav: '#/users', title: 'Users' },
   { pattern: /^#\/groups\/(\d+)$/, url: (m) => '/api/groups/' + m[1], render: renderGroup, nav: '#/groups', title: 'Group' },
   { pattern: /^#\/groups$/, url: () => '/api/groups', render: renderGroups, nav: '#/groups', title: 'Groups' },
   { pattern: /^#\/audit$/, url: () => '/api/audit?limit=' + AUDIT_PAGE_SIZE, render: renderAudit, nav: '#/audit', title: 'Audit log' },
+  { pattern: /^#\/transfers\/(t_[0-9a-f]+)$/, url: (m) => '/api/transfers/' + m[1], render: renderTransfer, nav: '#/transfers', title: 'Transfer' },
+  { pattern: /^#\/transfers$/, url: () => '/api/transfers', render: renderTransfers, nav: '#/transfers', title: 'Transfers' },
 ];
 
 function currentRoute() {
@@ -1075,7 +1786,7 @@ async function refresh() {
   lastKey = key;
   // Redrawing only when something changed also keeps text you selected (to copy
   // an agent id, say) from disappearing every 2 seconds.
-  disposeTerminal(); // a page that is replaced takes its terminal with it
+  disposePage(); // a page that is replaced takes its terminal or file session with it
   view.replaceChildren(...build());
 }
 

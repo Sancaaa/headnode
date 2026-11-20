@@ -156,36 +156,64 @@ func (s *Server) createSession(userID int64) (string, error) {
 	return token, nil
 }
 
-// sessionUser finds the user behind the request's session cookie.
-func (s *Server) sessionUser(r *http.Request) (user, bool, error) {
-	cookie, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return user{}, false, nil // no cookie: not logged in
+// bearerKey is the context key that says how the request proved who it is.
+type bearerKey struct{}
+
+// viaBearer reports whether the request was authenticated with an
+// "Authorization: Bearer" token (hnctl) and not with the browser's cookie.
+func viaBearer(r *http.Request) bool {
+	bearer, _ := r.Context().Value(bearerKey{}).(bool)
+	return bearer
+}
+
+// requestToken returns the session token a request carries: a bearer token if
+// there is an Authorization header, otherwise the cookie. bearer says which.
+//
+// An Authorization header that is not "Bearer <token>" counts as a bearer
+// request with no valid token. It never falls back to the cookie: a request
+// that tries explicit credentials is judged on them alone.
+func requestToken(r *http.Request) (token string, bearer, valid bool) {
+	if header := r.Header.Get("Authorization"); header != "" {
+		token, found := strings.CutPrefix(header, "Bearer ")
+		return token, true, found && token != ""
+	}
+	if cookie, err := r.Cookie(sessionCookie); err == nil {
+		return cookie.Value, false, cookie.Value != ""
+	}
+	return "", false, false
+}
+
+// sessionUser finds the user behind the request's credentials: the session
+// cookie from a browser, or the bearer token from hnctl. Both are the same kind
+// of thing, a random token whose hash is in web_sessions (D-09, D-36).
+func (s *Server) sessionUser(r *http.Request) (u user, bearer, ok bool, err error) {
+	token, bearer, valid := requestToken(r)
+	if !valid {
+		return user{}, bearer, false, nil
 	}
 
-	var u user
 	var admin int
 	err = s.db.QueryRow(
 		`SELECT u.id, u.username, u.is_admin
 		 FROM web_sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = ? AND s.expires_at > ?`,
-		hashSecret(cookie.Value), time.Now().Unix(),
+		hashSecret(token), time.Now().Unix(),
 	).Scan(&u.ID, &u.Username, &admin)
 	if errors.Is(err, sql.ErrNoRows) {
-		return user{}, false, nil
+		return user{}, bearer, false, nil
 	}
 	if err != nil {
-		return user{}, false, fmt.Errorf("look up session: %w", err)
+		return user{}, bearer, false, fmt.Errorf("look up session: %w", err)
 	}
 	u.IsAdmin = admin == 1
-	return u, true, nil
+	return u, bearer, true, nil
 }
 
 // requireLogin wraps every API route except login (D-22): no valid session
 // means 401, and a change request from another site means 403.
 func (s *Server) requireLogin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, ok, err := s.sessionUser(r)
+		u, bearer, ok, err := s.sessionUser(r)
 		if err != nil {
 			slog.Error("check session", "err", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -196,12 +224,20 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			return
 		}
 		// Login first, Origin second: the Origin check only matters once the
-		// cookie is valid, and a caller with no login learns nothing else.
-		if !isSafeMethod(r.Method) && !sameOrigin(r) {
+		// credentials are valid, and a caller with no login learns nothing else.
+		//
+		// A bearer token is not checked for Origin, because the check exists for
+		// credentials the browser adds by itself. A cookie is sent with every
+		// request to this site, including ones another website triggers. A bearer
+		// token is only ever sent by code that was given it, so another website
+		// cannot make a browser use it (D-36).
+		if !bearer && !isSafeMethod(r.Method) && !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "bad origin")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
+		ctx := context.WithValue(r.Context(), userKey{}, u)
+		ctx = context.WithValue(ctx, bearerKey{}, bearer)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -226,18 +262,25 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxA
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	// Login is outside requireLogin, so it checks Origin itself. Without this,
-	// another website could log the visitor in as an attacker's account.
-	if !sameOrigin(r) {
-		writeError(w, http.StatusForbidden, "bad origin")
-		return
-	}
-
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		// "cli" asks for a bearer token in the reply instead of a cookie.
+		Client string `json:"client"`
 	}
 	if !readJSON(w, r, &req) {
+		return
+	}
+	cli := req.Client == "cli"
+
+	// Login is outside requireLogin, so it checks Origin itself. Without this,
+	// another website could log the visitor in as an attacker's account: it
+	// makes the browser send a login form, and the browser stores the cookie.
+	// A command-line login has no cookie to store and its answer cannot be read
+	// by another site, so there is nothing to forge, and a program has no
+	// Origin to send (D-36).
+	if !cli && !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "bad origin")
 		return
 	}
 
@@ -277,27 +320,52 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.loginLimit.reset(ip)
+	slog.Info("login", "user", u.Username, "ip", ip, "client", req.Client)
+
+	if cli {
+		// hnctl keeps the token in its own file and sends it as a bearer token.
+		// No cookie is set, and the token is in this one reply only.
+		s.audit(u.ID, "", "login", "ip="+ip+" client=cli")
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, struct {
+			user
+			Token string `json:"token"`
+		}{u, token})
+		return
+	}
 	setSessionCookie(w, r, token, int(sessionLifetime.Seconds()))
-	slog.Info("login", "user", u.Username, "ip", ip)
 	s.audit(u.ID, "", "login", "ip="+ip)
 	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Delete the session on the server, not just the cookie in the browser: a
-	// copied cookie must stop working too.
-	if cookie, err := r.Cookie(sessionCookie); err == nil {
-		if _, err := s.db.Exec(`DELETE FROM web_sessions WHERE token_hash = ?`, hashSecret(cookie.Value)); err != nil {
+	// copied cookie or token must stop working too.
+	if token, _, valid := requestToken(r); valid {
+		if _, err := s.db.Exec(`DELETE FROM web_sessions WHERE token_hash = ?`, hashSecret(token)); err != nil {
 			slog.Error("delete session", "err", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 	}
 	s.audit(currentUser(r).ID, "", "logout", "")
-	setSessionCookie(w, r, "", -1)
+	if !viaBearer(r) {
+		setSessionCookie(w, r, "", -1)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, currentUser(r))
+	u := currentUser(r)
+	canUpload, err := s.canUpload(u)
+	if err != nil {
+		internalError(w, "check permission", err)
+		return
+	}
+	// can_upload tells the page whether to show Transfers: only people who may
+	// send files to hosts have anything to do there.
+	writeJSON(w, http.StatusOK, struct {
+		user
+		CanUpload bool `json:"can_upload"`
+	}{u, canUpload})
 }

@@ -15,8 +15,11 @@ import (
 	"headnode/protocol"
 )
 
-// Version is the agent's own version, sent in hello.
-const Version = "0.1.0"
+// Version is the agent's own version, sent in hello and shown on the host's
+// page. 0.2.0 added file transfers (`fetch`) and 0.3.0 the file change reports
+// (`file_change`): an older agent ignores the command or stays silent, so the
+// version is how a person can tell whether a host is up to date.
+const Version = "0.3.0"
 
 const (
 	heartbeatInterval = 20 * time.Second
@@ -209,7 +212,16 @@ func readCommands(connCtx, agentCtx context.Context, cfg Config, conn *websocket
 			}
 			// Each session runs on its own goroutine with its own WebSocket,
 			// so a slow or stuck shell never holds up the control connection.
-			go runSession(agentCtx, cfg, open)
+			go runSession(agentCtx, cfg, conn, open)
+		case protocol.TypeFetch:
+			var fetch protocol.Fetch
+			if err := json.Unmarshal(env.Data, &fetch); err != nil {
+				slog.Warn("bad fetch message", "err", err)
+				continue
+			}
+			// A transfer can take minutes, so it gets its own goroutine like a
+			// session does. It reports on this connection when it is done.
+			go runFetch(agentCtx, cfg, conn, fetch)
 		default:
 			slog.Warn("unknown message from the server", "type", env.Type)
 		}

@@ -30,6 +30,9 @@ type host struct {
 	// Whether the current user may open a terminal on this host, so the page
 	// can offer a Shell button only to people it will work for.
 	CanShell bool `json:"can_shell"`
+	// Whether the current user may send files to this host. The "Send file"
+	// dialog lists only hosts where this is true.
+	CanFilesWrite bool `json:"can_files_write"`
 	// nil (JSON null) means the host is in no group: only admins see it.
 	GroupID   *int64  `json:"group_id"`
 	GroupName *string `json:"group_name"`
@@ -308,6 +311,7 @@ func (s *Server) loadHosts(u user, where string, args ...any) ([]host, error) {
 		}
 		// An ungrouped host has no members, so only admins can use a shell on it.
 		h.CanShell = u.IsAdmin || (groupID.Valid && roleAllows(roles[groupID.Int64], actionShell))
+		h.CanFilesWrite = u.IsAdmin || (groupID.Valid && roleAllows(roles[groupID.Int64], actionFilesWrite))
 		if infoJSON != "" {
 			var info protocol.Hello
 			if err := json.Unmarshal([]byte(infoJSON), &info); err != nil {
