@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -17,6 +18,10 @@ import (
 // protocol.md §4: if the other side of a session has not arrived this long
 // after the session was created, the session is cancelled.
 const sessionPairTimeout = 15 * time.Second
+
+// browserTunnelPort is the one port a browser may tunnel to on a host: the
+// standard VNC port, for the dashboard's screen viewer (D-49).
+const browserTunnelPort = "5900"
 
 // session is one shell (later: file view, tunnel) that has been asked for but
 // whose two WebSockets may not both have arrived yet.
@@ -252,6 +257,18 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		// A browser (a cookie login) may only open a tunnel to a VNC server: that is
+		// all the dashboard's screen viewer needs, and a page that can reach any
+		// port of a host's loopback would turn a bug in the page, or a stolen
+		// login in a browser tab, into a way into the host's databases and admin
+		// panels. hnctl, which logs in with a token it was given on purpose, keeps
+		// every loopback port (D-35, D-36, D-49).
+		if !viaBearer(r) {
+			if _, port, _ := net.SplitHostPort(target); port != browserTunnelPort {
+				writeError(w, http.StatusForbidden, "the browser may only open a tunnel to a VNC server (port "+browserTunnelPort+"): use hnctl forward for other ports")
+				return
+			}
 		}
 		tunnelTarget = target
 		kindParams = protocol.TunnelParams{Target: target}

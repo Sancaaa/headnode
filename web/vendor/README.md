@@ -10,6 +10,7 @@ it again.
 | `xterm.js` | the terminal emulator the Terminal tab draws with | `@xterm/xterm` 5.5.0 | MIT, see `LICENSE-xterm.txt` |
 | `xterm.css` | its stylesheet | `@xterm/xterm` 5.5.0 | MIT |
 | `addon-fit.js` | resizes the terminal to fill its box | `@xterm/addon-fit` 0.10.0 | MIT |
+| `novnc/core/`, `novnc/vendor/` | the remote screen viewer of the Screen page (D-49): noVNC's own ES modules, unmodified | `@novnc/novnc` 1.5.0 | MPL-2.0, see `novnc/LICENSE.txt` |
 
 ## How to download them
 
@@ -28,3 +29,30 @@ Then restart the server: the files are compiled into the binary.
 
 Without these files everything else works, and the Terminal tab explains that
 the library is missing.
+
+## noVNC (the Screen page)
+
+noVNC is published as plain ES modules, which a browser loads as they are, so it
+is vendored as the package's own `core/` and `vendor/` folders, unmodified: no
+bundler, nothing built. This downloads the pinned release from the npm registry
+and copies those folders (Windows 10 and later have `tar`; no Node.js needed).
+Run it from the project root in PowerShell:
+
+```powershell
+$t = Join-Path $env:TEMP "novnc"
+Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $t | Out-Null
+Invoke-WebRequest https://registry.npmjs.org/@novnc/novnc/-/novnc-1.5.0.tgz -OutFile "$t\novnc.tgz"
+tar -xzf "$t\novnc.tgz" -C $t
+Remove-Item -Recurse -Force web\vendor\novnc -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force web\vendor\novnc | Out-Null
+Copy-Item -Recurse "$t\package\core" web\vendor\novnc\core
+Copy-Item -Recurse "$t\package\vendor" web\vendor\novnc\vendor
+Copy-Item "$t\package\LICENSE*" web\vendor\novnc\
+Copy-Item "$t\package\AUTHORS" web\vendor\novnc\ -ErrorAction SilentlyContinue
+```
+
+The page loads `web/vendor/novnc/core/rfb.js`. Because noVNC's license (MPL-2.0)
+applies to the files themselves, they are kept unmodified with their license text
+next to them. Then restart the server. Without these files everything else works,
+and the Screen page explains that the viewer library is missing.

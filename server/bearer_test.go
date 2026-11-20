@@ -203,8 +203,9 @@ func TestOpenTunnelSession(t *testing.T) {
 		return map[string]any{"kind": "tunnel", "params": map[string]any{"target": target}}
 	}
 
-	// alice is an operator: the agent is told which port to reach.
-	code, id := openSession(t, w.clients["alice"], w.srv, web, request("127.0.0.1:22"))
+	// alice is an operator: the agent is told which port to reach. These are
+	// browser logins (cookies), which may tunnel to a VNC server only (D-49).
+	code, id := openSession(t, w.clients["alice"], w.srv, web, request("127.0.0.1:5900"))
 	if code != http.StatusCreated || !strings.HasPrefix(id, "s_") {
 		t.Fatalf("alice: status = %d, id = %q", code, id)
 	}
@@ -213,17 +214,17 @@ func TestOpenTunnelSession(t *testing.T) {
 	if err := json.Unmarshal(open.Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if open.Kind != protocol.KindTunnel || open.SessionID != id || params.Target != "127.0.0.1:22" {
-		t.Errorf("the agent got %+v with %+v, want a tunnel to 127.0.0.1:22", open, params)
+	if open.Kind != protocol.KindTunnel || open.SessionID != id || params.Target != "127.0.0.1:5900" {
+		t.Errorf("the agent got %+v with %+v, want a tunnel to 127.0.0.1:5900", open, params)
 	}
 
 	// A tunnel is as powerful as a shell, so it needs the same role. A viewer
 	// may not, and a host that cannot be seen does not exist.
-	if code, _ := openSession(t, w.clients["bob"], w.srv, web, request("127.0.0.1:22")); code != http.StatusForbidden {
+	if code, _ := openSession(t, w.clients["bob"], w.srv, web, request("127.0.0.1:5900")); code != http.StatusForbidden {
 		t.Errorf("viewer: status = %d, want 403", code)
 	}
 	for _, who := range []string{"carol", "dave"} {
-		if code, _ := openSession(t, w.clients[who], w.srv, web, request("127.0.0.1:22")); code != http.StatusNotFound {
+		if code, _ := openSession(t, w.clients[who], w.srv, web, request("127.0.0.1:5900")); code != http.StatusNotFound {
 			t.Errorf("%s: status = %d, want 404", who, code)
 		}
 	}
@@ -242,12 +243,51 @@ func TestOpenTunnelSession(t *testing.T) {
 	// Opening is audited with the target.
 	var found bool
 	for _, r := range auditRows(t, w.s.db) {
-		if r.Action == "session_open" && r.Detail == "kind=tunnel target=127.0.0.1:22" {
+		if r.Action == "session_open" && r.Detail == "kind=tunnel target=127.0.0.1:5900" {
 			found = true
 		}
 	}
 	if !found {
 		t.Error("no session_open entry with kind=tunnel and the target")
+	}
+}
+
+// A browser may tunnel to a VNC server and nothing else, whoever is logged in:
+// not even an admin's cookie reaches the host's ssh, database or admin panels.
+// hnctl, with a token, may reach any loopback port (D-35, D-49).
+func TestBrowserMayOnlyTunnelToVNC(t *testing.T) {
+	s, srv, id, secret := newTestServer(t)
+	if err := CreateUser(s.db, "sanca", "correct horse", true); err != nil {
+		t.Fatal(err)
+	}
+	browser := loginExisting(t, srv, "sanca")
+	_, token, _ := cliLogin(t, srv, "sanca", "correct horse")
+	control := connectAgent(t, s, srv, id, secret)
+	request := func(target string) map[string]any {
+		return map[string]any{"kind": "tunnel", "params": map[string]any{"target": target}}
+	}
+
+	for _, target := range []string{"127.0.0.1:22", "127.0.0.1:3389", "localhost:5432", "127.0.0.1:59000", "127.0.0.1:590"} {
+		if code, _ := openSession(t, browser, srv, id, request(target)); code != http.StatusForbidden {
+			t.Errorf("browser to %s: status = %d, want 403", target, code)
+		}
+	}
+	for _, target := range []string{"127.0.0.1:5900", "localhost:5900"} {
+		if code, _ := openSession(t, browser, srv, id, request(target)); code != http.StatusCreated {
+			t.Errorf("browser to %s: status = %d, want 201", target, code)
+		}
+		readOpen(t, control)
+	}
+
+	// The command line client has no such limit: SSH and RDP are what it is for.
+	for _, target := range []string{"127.0.0.1:22", "127.0.0.1:3389", "127.0.0.1:5900"} {
+		var reply struct {
+			ID string `json:"id"`
+		}
+		if code := withToken(t, "POST", srv.URL+"/api/hosts/"+id+"/sessions", token, request(target), &reply); code != http.StatusCreated {
+			t.Errorf("hnctl to %s: status = %d, want 201", target, code)
+		}
+		readOpen(t, control)
 	}
 }
 

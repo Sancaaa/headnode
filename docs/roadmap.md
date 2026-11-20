@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M6**
+**Active milestone: M8**
 
 ---
 
@@ -75,15 +75,15 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 - [x] File manager quality of life (D-39): upload keeps both files, Move, Copy, Copy path, sort, filter, hidden files, multi-select, rename in the row, Properties (with a folder's size), chmod
 - [x] File manager, third round (D-41): download a folder as a zip, view/edit a text file, send a file from a host to other hosts, drag and drop to upload and to move
 - [x] Several files per upload and per send (D-42)
-- [ ] Send several items and whole folders from a host to other hosts (D-43): zip, `extract`, safe unpack on the agent
+- [x] Send several items and whole folders from a host to other hosts (D-43): zip, `extract`, safe unpack on the agent
 
 **Done when:** deleting an upload from the dashboard removes its row and (when nothing else uses it) its file in `data/files/`, a brand-new data directory has mode `0700`, the Hosts page shows the online count, and the sidebar shows the server version and uptime.
 
 ## M6 — Easy install & deploy (A2, C8)
 - [x] Cross-OS/arch builds (`GOOS`/`GOARCH`), agent binaries served by the server (D-40)
-- [ ] `install.sh`: download the agent, enroll, install a systemd service (D-46)
-- [ ] `headnode-agent service install|uninstall` (D-46)
-- [ ] VPS deploy guide: headnode as a service + Caddy, from a git clone with `start.sh` (`docs/deploy.md`, `deploy/`, D-45). Its checklist must include: **an existing data directory must be `chmod 700`** (the server creates new ones `0700`, but `os.MkdirAll` never changes a directory that already exists, and this one holds password hashes, agent secret hashes and uploaded files)
+- [x] `install.sh`: download the agent, enroll, install a systemd service (D-46); the agent runs as the installing user (D-48)
+- [x] `headnode-agent service install|uninstall` (D-46)
+- [x] VPS deploy guide: headnode as a service + Caddy, from a git clone with `start.sh` (`docs/deploy.md`, `deploy/`, D-45). Its checklist must include: **an existing data directory must be `chmod 700`** (the server creates new ones `0700`, but `os.MkdirAll` never changes a directory that already exists, and this one holds password hashes, agent secret hashes and uploaded files)
 
 **Done when:** a new host can be managed from the public dashboard with **one** command.
 
@@ -92,19 +92,19 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 Remote Windows is planned as two milestones (D-44). The idea: the agent never touches the screen. A normal VNC server on the host does that, listening on loopback only, and the agent reaches it with the `tunnel` session that already exists (D-35 stays as it is).
 
 ## M7 — Windows agent, minimal (D-12, D-44)
-- [ ] Windows system info (`sysinfo_windows.go`): hostname, OS version, CPU, RAM, disks, uptime (D-47)
-- [ ] The agent runs as a Windows service: `headnode-agent service install|uninstall` on Windows (D-47)
-- [ ] `windows/amd64` added to the build script and to the served agent list (D-40, D-47)
-- [ ] `install.ps1`: download the agent, enroll, install the service (same flow as `install.sh`)
-- [ ] Hosts page: Shell and Files are hidden for Windows hosts until they work there
-- [ ] Guide: TightVNC (or UltraVNC) on Windows, as a service, **loopback connections only**, with a password; optional: OpenSSH Server and RDP, reached with `hnctl forward` (`docs/windows.md`)
+- [x] Windows system info (`sysinfo_windows.go`): hostname, OS version, CPU, RAM, disks, uptime (D-47)
+- [x] The agent runs as a Windows service: `headnode-agent service install|uninstall` on Windows (D-47)
+- [x] `windows/amd64` added to the build script and to the served agent list (D-40, D-47)
+- [x] `install.ps1`: download the agent, enroll, install the service (same flow as `install.sh`)
+- [x] Hosts page: Shell and Files are hidden for Windows hosts until they work there
+- [x] Guide: TightVNC (or UltraVNC) on Windows, as a service, **loopback connections only**, with a password; optional: OpenSSH Server and RDP, reached with `hnctl forward` (`docs/windows.md`)
 
 **Done when:** a Windows host is added with one command and shows *online* with CPU/RAM/disk. `hnctl forward 5900:<host>:127.0.0.1:5900` plus a VNC viewer on the laptop controls its screen, including the login screen. On a Windows Pro host, `hnctl forward 3389:<host>:127.0.0.1:3389` plus `mstsc` opens RDP.
 
 ## M8 — VNC in the browser (B4)
-- [ ] noVNC vendored (like xterm.js), with a decisions entry
+- [ ] noVNC vendored (like xterm.js), with a decisions entry (D-49)
 - [ ] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
-- [ ] Viewer page: screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
+- [ ] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
 - [ ] **VNC** button on host rows
 
 **Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way.

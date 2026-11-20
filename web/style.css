@@ -154,7 +154,7 @@ tr:hover .name { color: var(--text-link); }
 /* The Hosts table: every cell is centered vertically, so a one-line status
    and a two-line addresses cell sit on the same middle line as the name. */
 .hosts-table td { vertical-align: middle; }
-.hosts-table .col-act { width: 200px; white-space: nowrap; }
+.hosts-table .col-act { width: 270px; white-space: nowrap; }
 .hosts-table .col-act .btn + .btn { margin-left: 8px; }
 /* Both buttons sit on the middle of the row. Without this they line up on their
    text baselines, and the one with a picture (Files) rides higher than the one
@@ -326,6 +326,14 @@ body.logged-out .main { background: var(--bg-app); }
 /* the permission boxes: owner, group, others against read, write, execute */
 .perm-grid { width: auto; margin-bottom: 12px; }
 .perm-grid td { padding: 6px 16px 6px 0; border-bottom: 0; vertical-align: middle; }
+
+/* the Screen page: a bar above the remote screen, which fills the window below it */
+.screen-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0 8px; min-height: 28px; }
+.screen-actions { display: flex; gap: 8px; flex: none; }
+.screen {
+  height: calc(100vh - 300px); min-height: 360px;
+  background: var(--terminal-bg); border-radius: var(--radius); overflow: hidden;
+}
 
 /* the Add host dialog: one heading per operating system's command */
 .command-title { margin: 16px 0 0; font-size: 14px; font-weight: 600; }

@@ -150,8 +150,11 @@ func uiHandler() http.Handler {
 		// style-src also allows inline styles, for xterm.js (D-28): it creates
 		// <style> elements at run time to size and color the terminal. Scripts
 		// stay locked to our own files.
+		//
+		// img-src also allows data: URLs, for noVNC (D-49): the mouse cursor of the
+		// remote screen is drawn from a data URL. Images from other sites stay blocked.
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
 	})

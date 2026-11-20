@@ -241,7 +241,9 @@ async function loadList(path) {
 // Two optional extras for the editor: wide makes the dialog big, and canClose
 // is asked before Cancel or Escape closes it (return false to keep it open, for
 // "you have unsaved changes").
-function openDialog({ title, fields, submitLabel, cancelLabel = 'Cancel', danger = false, wide = false, canClose = null, onSubmit }) {
+// onClose runs when the dialog has closed, however it closed (the password
+// prompt of the screen viewer uses it to learn that it was cancelled).
+function openDialog({ title, fields, submitLabel, cancelLabel = 'Cancel', danger = false, wide = false, canClose = null, onClose = null, onSubmit }) {
   const heading = h('h2', { class: 'dialog-title' }, title);
   const error = h('div', { class: 'form-error', role: 'alert' });
   const submit = h('button', { class: danger ? 'btn btn-danger' : 'btn btn-primary', type: 'submit' }, submitLabel);
@@ -273,6 +275,7 @@ function openDialog({ title, fields, submitLabel, cancelLabel = 'Cancel', danger
   // However it was closed (Done, Cancel, Esc), show the latest data.
   dlg.addEventListener('close', () => {
     dlg.remove();
+    if (onClose) onClose();
     // Show the latest data. A static page (the terminal, the file manager) keeps
     // its own state, and rebuilding it would throw away its session, so it
     // refreshes itself after a change instead.
@@ -358,7 +361,7 @@ function hostRow(host) {
       h('div', { class: 'sub' }, 'WAN: ' + (host.wan_addr || '—'))),
     h('td', { class: 'col-usage num' }, usageSummary(host)),
     h('td', {}, statusText(host)),
-    h('td', { class: 'col-act' }, filesButton(host), shellButton(host)));
+    h('td', { class: 'col-act' }, filesButton(host), shellButton(host), vncButton(host)));
 
   // The whole row is clickable. The name is a real link too, so the page
   // still works from the keyboard.
@@ -406,6 +409,23 @@ function shellButton(host) {
 function filesButton(host) {
   if (!host.online || isWindows(host)) return null;
   const link = h('a', { class: 'btn btn-small', href: filesHref(host.id) }, icon(ICON_FOLDER), 'Files');
+  link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
+  return link;
+}
+
+// Where the remote screen of a host lives (D-49): a VNC server on the host,
+// reached through a tunnel, drawn by noVNC.
+function screenHref(hostId) {
+  return hostLink(hostId) + '/screen';
+}
+
+// The VNC button on a host's row. A tunnel needs the same role as a shell
+// (can_shell), and the host has to be online. It is offered for every host, not
+// only Windows ones: any machine with a VNC server on 127.0.0.1:5900 works. A host
+// without one answers with a clear message on the page.
+function vncButton(host) {
+  if (!host.online || !host.can_shell) return null;
+  const link = h('a', { class: 'btn btn-small', href: screenHref(host.id) }, icon(ICON_HOSTS), 'VNC');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
 }
@@ -648,15 +668,16 @@ function hostTabs(host, active) {
   return h('nav', { class: 'tabs' },
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
     isWindows(host) ? null : h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
-    isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'));
+    isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'),
+    h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen'));
 }
 
 // What the Terminal and Files pages say when someone opens them for a Windows
 // host anyway (an old link, or the address typed by hand).
 function windowsNotice(host) {
   return h('div', { class: 'notice' },
-    host.name + ' is a Windows host. It has no terminal or file manager yet: it is managed with a VNC server ' +
-    'through a tunnel (hnctl forward 5900:' + host.name + ':127.0.0.1:5900). See docs/windows.md.');
+    host.name + ' is a Windows host. It has no terminal or file manager yet: use the Screen tab (a VNC server ' +
+    'on the host, shown here), or hnctl forward 5900:' + host.name + ':127.0.0.1:5900 with a VNC viewer. See docs/windows.md.');
 }
 
 function renderTerminalPage(host) {
@@ -775,6 +796,165 @@ function mountTerminal(host, box, status, reconnect) {
       term.dispose();
     },
   };
+  connect();
+}
+
+// ------------------------------------------------------------- Screen page
+
+// The screen of a host (D-44, D-49): noVNC, a VNC viewer written in JavaScript
+// (web/vendor/novnc), speaking to a VNC server on the host's own loopback
+// through a `tunnel` session. The server lets a browser tunnel to this one port
+// only, so a VNC server on the host is all the host needs.
+const VNC_TARGET = '127.0.0.1:5900';
+
+function renderScreenPage(host) {
+  document.title = host.name + ' · headnode';
+  const page = [
+    h('a', { class: 'back', href: '#/' }, '← Hosts'),
+    pageHead(host.name, null),
+    h('div', { class: 'status' }, statusText(host)),
+    hostTabs(host, 'screen'),
+  ];
+  if (!host.online) {
+    page.push(h('div', { class: 'notice' },
+      'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
+    return page;
+  }
+
+  const status = h('span', { class: 'sub' }, 'Loading the viewer…');
+  const cad = button('Ctrl+Alt+Del', 'btn btn-small', () => {});
+  cad.disabled = true; // until connected
+  const toggle = button('Disconnect', 'btn btn-small', () => {});
+  const box = h('div', { class: 'screen' });
+  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle)), box);
+
+  // Built after the box is on the page: noVNC measures it to scale the screen.
+  queueMicrotask(() => mountScreen(host, box, status, cad, toggle));
+  return page;
+}
+
+// Asks for the VNC password (the VNC server's own, not a headnode one). It goes to
+// the server for this connection only, and is never stored. Resolves with the
+// password, or null if the person cancelled.
+function askVncPassword(hostName) {
+  return new Promise((resolve) => {
+    const password = h('input', { class: 'input', type: 'password', name: 'password', autocomplete: 'off', required: '' });
+    let answered = false;
+    openDialog({
+      title: 'VNC password',
+      fields: [
+        h('p', { class: 'sub' }, 'The password of the VNC server on ' + hostName + '. It is used for this connection and is never stored.'),
+        field('Password', password),
+      ],
+      submitLabel: 'Connect',
+      onSubmit: async () => {
+        answered = true;
+        resolve(password.value);
+        return null;
+      },
+      onClose: () => { if (!answered) resolve(null); },
+    });
+  });
+}
+
+async function mountScreen(host, box, status, cad, toggle) {
+  let disposed = false;
+  let rfb = null;
+  let ws = null;
+  let closeReason = ''; // why the tunnel closed, from the agent: "connect: connection refused"...
+
+  pageSession = {
+    dispose() {
+      disposed = true;
+      if (rfb) {
+        try { rfb.disconnect(); } catch (err) { /* already gone */ }
+      }
+      if (ws) ws.close(1000);
+    },
+  };
+
+  // noVNC is a set of ES modules, loaded when this page opens (and not on every
+  // page of the dashboard). If the files are not there, say so.
+  let RFB;
+  try {
+    RFB = (await import('/vendor/novnc/core/rfb.js')).default;
+  } catch (err) {
+    if (disposed) return;
+    box.replaceChildren(h('div', { class: 'notice' },
+      'The screen viewer library is missing. Download noVNC into web/vendor (see web/vendor/README.md) and restart the server.'));
+    status.textContent = '';
+    toggle.hidden = true;
+    return;
+  }
+  if (disposed) return;
+
+  async function connect() {
+    toggle.textContent = 'Disconnect';
+    cad.disabled = true;
+    status.textContent = 'Connecting…';
+    closeReason = '';
+    const result = await api('POST', '/api/hosts/' + host.id + '/sessions', { kind: 'tunnel', params: { target: VNC_TARGET } });
+    if (disposed) return;
+    if (!result.ok) {
+      ended(plain(errorText(result)));
+      return;
+    }
+
+    ws = openSocket(result.data.id);
+    // Added before noVNC attaches its own handlers, so this runs first and the
+    // reason is known by the time noVNC reports the disconnect.
+    ws.addEventListener('close', (event) => { closeReason = plain(event.reason); });
+    rfb = new RFB(box, ws, {});
+    rfb.scaleViewport = true;   // the whole screen, scaled to the window
+    rfb.resizeSession = false;  // never change the host's own resolution
+    rfb.background = '#111010';
+    rfb.addEventListener('connect', () => {
+      status.textContent = 'Connected';
+      cad.disabled = false;
+      rfb.focus();
+    });
+    rfb.addEventListener('desktopname', (event) => {
+      status.textContent = 'Connected: ' + plain(event.detail.name); // text from the host: shown as text
+    });
+    rfb.addEventListener('credentialsrequired', async () => {
+      const password = await askVncPassword(host.name);
+      if (disposed || !rfb) return;
+      if (password === null) {
+        rfb.disconnect();
+        return;
+      }
+      rfb.sendCredentials({ password });
+    });
+    rfb.addEventListener('securityfailure', (event) => {
+      closeReason = plain((event.detail && event.detail.reason) || 'the VNC server refused the password');
+    });
+    rfb.addEventListener('disconnect', (event) => {
+      rfb = null;
+      ws = null;
+      if (disposed) return;
+      ended(closeReason, event.detail && event.detail.clean);
+    });
+  }
+
+  // What the person is told when the connection is over, and why.
+  function ended(reason, clean) {
+    cad.disabled = true;
+    toggle.textContent = 'Reconnect';
+    if (/refused/i.test(reason)) {
+      status.textContent = 'Nothing is listening on port 5900 of this host. Install a VNC server there and set it to ' +
+        'accept connections from this machine only (docs/windows.md), then Reconnect.';
+    } else if (reason) {
+      status.textContent = 'Disconnected: ' + reason;
+    } else {
+      status.textContent = clean === false ? 'The connection was lost.' : 'Disconnected.';
+    }
+  }
+
+  toggle.addEventListener('click', () => {
+    if (rfb) rfb.disconnect(); // ends the session on the host: the tunnel closes with it
+    else connect();
+  });
+  cad.addEventListener('click', () => { if (rfb) rfb.sendCtrlAltDel(); });
   connect();
 }
 
@@ -2531,6 +2711,7 @@ const routes = [
   // static: drawn once per visit, never by the 2-second poll (see refresh).
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/terminal$/, url: (m) => '/api/hosts/' + m[1], render: renderTerminalPage, nav: '#/', title: 'Terminal', static: true },
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/files$/, url: (m) => '/api/hosts/' + m[1], render: renderFilesPage, nav: '#/', title: 'Files', static: true },
+  { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/screen$/, url: (m) => '/api/hosts/' + m[1], render: renderScreenPage, nav: '#/', title: 'Screen', static: true },
   { pattern: /^#\/users$/, url: () => '/api/users', render: renderUsers, nav: '#/users', title: 'Users' },
   { pattern: /^#\/groups\/(\d+)$/, url: (m) => '/api/groups/' + m[1], render: renderGroup, nav: '#/groups', title: 'Group' },
   { pattern: /^#\/groups$/, url: () => '/api/groups', render: renderGroups, nav: '#/groups', title: 'Groups' },

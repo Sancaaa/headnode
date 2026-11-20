@@ -47,7 +47,13 @@ Get-NetTCPConnection -LocalPort 5900 -State Listen | Select-Object LocalAddress,
 
 `LocalAddress` must say `127.0.0.1`, not `0.0.0.0`.
 
-## 3. Connect from your laptop
+## 3. Connect from the browser
+
+In the dashboard, click **VNC** on the host's row (or its **Screen** tab). The screen opens in the page, scaled to the window. It asks for the VNC password once per connection (it is not stored), and has a **Ctrl+Alt+Del** button for the Windows login screen and **Disconnect** to end the session. If the page says nothing is listening on port 5900, the VNC server is not running or is not on the standard port: check step 2. You need the **operator** role in the host's group. Closing the tab ends the session on the host.
+
+The browser can only reach port 5900. For anything else (RDP, SSH, a VNC server on another port) use `hnctl`, below.
+
+## 4. Or connect from your laptop with a viewer program
 
 On your own computer, log in once and forward a local port to the Windows host's VNC port (see `hnctl` in the main docs):
 
@@ -69,4 +75,4 @@ The same tunnel carries anything on the host's own loopback:
 
 ## What does not work on Windows yet
 
-The Hosts page hides **Shell** and **Files** for Windows hosts, because the agent has no terminal and file manager for Windows yet. Sending files to a Windows host from the Transfers page is not offered either. The screen in the browser (no separate viewer program) is planned as the next milestone.
+The Hosts page hides **Shell** and **Files** for Windows hosts, because the agent has no terminal and file manager for Windows yet. Sending files to a Windows host from the Transfers page is not offered either. The screen is available in the browser (Screen tab) and with any VNC viewer through `hnctl`.
