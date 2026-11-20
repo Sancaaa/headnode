@@ -20,11 +20,6 @@
 # runs anything: a download that is cut short is a syntax error, and does nothing.
 param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '', [switch]$ReplaceVnc)
 
-# Printed so that a person (or whoever helps them) can tell WHICH installer ran: the
-# server hands out the script it was built with, so a server that was not redeployed
-# serves an old one. Raise the number whenever this script changes.
-Write-Host 'headnode installer, revision 7'
-
 $ErrorActionPreference = 'Stop'
 $Server = '__SERVER__'
 # TightVNC is downloaded from its makers, not bundled: it is GPL software, and the
@@ -144,16 +139,24 @@ function Install-Vnc {
     }
     if ($tightMajor -ge 4) {
         # The MSI product code is the name of the program's key in the uninstall list.
-        $entries = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-                                      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-            Where-Object { "$($_.DisplayName)" -like 'TightVNC*' })
-        if ($entries.Count -eq 0) { Fail 'cannot find TightVNC in the list of installed programs: uninstall it in Settings > Apps, then run this command again' }
-        foreach ($entry in $entries) {
-            $code = "$($entry.PSChildName)"
-            if ($code -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
-                Fail "cannot uninstall $($entry.DisplayName): it is not an MSI package. Uninstall it in Settings > Apps, then run this command again"
+        # Each key is opened and ONE value read from it: Get-ItemProperty on the whole
+        # list throws "Specified cast is not valid" as soon as any program on the machine
+        # has a value of an unexpected type.
+        $codes = @()
+        foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+            if (-not (Test-Path $root)) { continue }
+            foreach ($key in Get-ChildItem $root -ErrorAction SilentlyContinue) {
+                try { $shown = "$($key.GetValue('DisplayName'))" } catch { continue }
+                if ($shown -like 'TightVNC*') { $codes += "$($key.PSChildName)" }
             }
-            Write-Host "Uninstalling $($entry.DisplayName)..."
+        }
+        if ($codes.Count -eq 0) { Fail 'cannot find TightVNC in the list of installed programs: uninstall it in Settings > Apps, then run this command again' }
+        foreach ($code in $codes) {
+            if ($code -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
+                Fail 'cannot uninstall TightVNC: it is not an MSI package. Uninstall it in Settings > Apps, then run this command again'
+            }
+            Write-Host "Uninstalling TightVNC $code..."
             $u = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', $code, '/quiet', '/norestart') -Wait -PassThru
             if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Fail "uninstalling TightVNC failed (exit code $($u.ExitCode))" }
         }
@@ -241,8 +244,6 @@ if ($NoVnc) {
         Install-Vnc
     } catch {
         Write-Warning "The screen was not set up: $($_.Exception.Message)"
-        # Where it happened, for a failure like "Specified cast is not valid" that says nothing else.
-        Write-Warning "At: $($_.InvocationInfo.PositionMessage)"
         Write-Warning 'The agent works without it. See docs/windows.md to set up VNC by hand, or run this script again.'
     }
 }

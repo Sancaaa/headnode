@@ -441,8 +441,9 @@ function vncButton(host) {
   return link;
 }
 
-// Whether the agent can start and stop this host's VNC server (D-51): today a
-// TightVNC service on Windows, which install.ps1 sets up.
+// Whether the agent can start and stop this host's VNC server (D-51, D-54): a
+// TightVNC service on Windows (install.ps1 sets it up), or wayvnc / x11vnc on a
+// Linux desktop (install.sh makes sure it is installed).
 function canSwitchVnc(host) {
   return Boolean(host.online && host.can_shell && host.heartbeat && host.heartbeat.vnc_control);
 }

@@ -102,12 +102,13 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 **Done when:** a Windows host is added with one command and shows *online* with CPU/RAM/disk. `hnctl forward 5900:<host>:127.0.0.1:5900` plus a VNC viewer on the laptop controls its screen, including the login screen. On a Windows Pro host, `hnctl forward 3389:<host>:127.0.0.1:3389` plus `mstsc` opens RDP.
 
 ## M8 — VNC in the browser (B4)
-- [ ] noVNC added, with a decisions entry (D-49); the server downloads it itself in `start.sh` (D-52)
-- [ ] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
-- [ ] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
-- [ ] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)
-- [ ] **Start VNC** / **Stop VNC** from the dashboard for Windows hosts, to save the machine's resources (D-51)
-- [ ] `install.ps1` installs TightVNC itself, loopback only, so a client runs one command and gets the screen (D-50); `-NoVnc` and `-VncPassword` options
+- [x] noVNC added, with a decisions entry (D-49); the server downloads it itself in `start.sh` (D-52)
+- [x] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
+- [x] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
+- [x] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)
+- [x] **Start VNC** / **Stop VNC** from the dashboard for Windows hosts, to save the machine's resources (D-51)
+- [x] `install.ps1` installs TightVNC 2.8.90 itself, loopback only, switched off, so a client runs one command and gets the screen (D-50, D-53); `-NoVnc`, `-VncPassword` and `-ReplaceVnc` options
+- [ ] Linux desktops (tested on a Raspberry Pi 5): `install.sh` prepares wayvnc or x11vnc, and Start VNC / Stop VNC run it on `127.0.0.1:5900` (D-54)
 
 **Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way. A Windows host added with the one install command shows **Start VNC** (the screen is off by default, D-50), and after one click its VNC button, with nothing else to install.
 
