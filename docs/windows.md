@@ -31,7 +31,7 @@ The same command also sets up the screen (D-50): it downloads TightVNC from tigh
 
 If a VNC server already listens on port 5900, the script keeps it as it is and only warns when it is open to the network.
 
-**Switching the screen on and off (D-51).** A VNC server uses CPU and memory all the time, even when nobody is watching, and shares the screen while it runs, so the installer leaves it off. The Hosts page shows **Start VNC** where the VNC button would be; one click starts it and the VNC button comes back within seconds. **Stop VNC** on its Screen page stops it again and sets it to start only by hand, so it stays off after a reboot. (Starting it sets it to start at boot, until you stop it again.) You need the same operator role as for the screen itself, and every start and stop is in the audit log. This works for the TightVNC the install command set up (the service named `tvnserver`).
+**Switching the screen on and off (D-51).** A VNC server uses CPU and memory all the time, even when nobody is watching, and shares the screen while it runs, so the installer leaves it off. The Hosts page shows **Start VNC** where the VNC button would be; one click starts it and the VNC button comes back within seconds. **Stop VNC** on its Screen page stops it again and sets it to start only by hand, so it stays off after a reboot; on that page the same button then reads **Start VNC**, and the screen connects by itself once the server is up. (Starting it sets it to start at boot, until you stop it again.) You need the same operator role as for the screen itself, and every start and stop is in the audit log. This works for the TightVNC the install command set up (the service named `tvnserver`).
 
 ## 2. Install a VNC server by hand, for loopback only
 

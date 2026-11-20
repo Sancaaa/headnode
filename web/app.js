@@ -871,13 +871,15 @@ function renderScreenPage(host) {
   cad.disabled = true; // until connected
   const toggle = button('Disconnect', 'btn btn-small', () => {});
   const box = h('div', { class: 'screen' });
-  // Stop VNC switches the server on the host off, to save its resources; it also
-  // ends this view. Starting it again is the button on the Hosts page.
-  const stop = canSwitchVnc(host) ? vncSwitch(host, false) : null;
-  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, stop)), box);
+  // Stop VNC / Start VNC switches the server on the host off or on (D-51), to save
+  // its resources. Its label follows the host's real state, which mountScreen
+  // keeps asking for: this page is drawn once and the poll does not redraw it.
+  const power = button('Stop VNC', 'btn btn-small', () => {});
+  power.hidden = true; // until mountScreen knows that this host can be switched
+  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, power)), box);
 
   // Built after the box is on the page: noVNC measures it to scale the screen.
-  queueMicrotask(() => mountScreen(host, box, status, cad, toggle));
+  queueMicrotask(() => mountScreen(host, box, status, cad, toggle, power));
   return page;
 }
 
@@ -905,15 +907,22 @@ function askVncPassword(hostName) {
   });
 }
 
-async function mountScreen(host, box, status, cad, toggle) {
+async function mountScreen(host, box, status, cad, toggle, power) {
   let disposed = false;
   let rfb = null;
   let ws = null;
   let closeReason = ''; // why the tunnel closed, from the agent: "connect: connection refused"...
+  let everConnected = false; // did the screen appear at all in this attempt?
+  let attempting = false;    // between "Connect" and the connection ending
+  let latest = host;         // the host as the server last described it (see watchHost)
+  let wasUp = hasVnc(host);
+  let pending = null;        // { enabled, at } while a Start or Stop VNC is in flight
+  let watcher = null;
 
   pageSession = {
     dispose() {
       disposed = true;
+      clearInterval(watcher);
       if (rfb) {
         try { rfb.disconnect(); } catch (err) { /* already gone */ }
       }
@@ -937,6 +946,8 @@ async function mountScreen(host, box, status, cad, toggle) {
   if (disposed) return;
 
   async function connect() {
+    attempting = true;
+    everConnected = false;
     toggle.textContent = 'Disconnect';
     cad.disabled = true;
     status.textContent = 'Connecting…';
@@ -957,6 +968,7 @@ async function mountScreen(host, box, status, cad, toggle) {
     rfb.resizeSession = false;  // never change the host's own resolution
     rfb.background = '#111010';
     rfb.addEventListener('connect', () => {
+      everConnected = true;
       status.textContent = 'Connected';
       cad.disabled = false;
       rfb.focus();
@@ -980,23 +992,81 @@ async function mountScreen(host, box, status, cad, toggle) {
       rfb = null;
       ws = null;
       if (disposed) return;
+      // For whoever has to find out why a connection dropped: the browser's console.
+      console.info('noVNC disconnected', { clean: event.detail && event.detail.clean, tunnelReason: closeReason, everConnected });
       ended(closeReason, event.detail && event.detail.clean);
     });
   }
 
   // What the person is told when the connection is over, and why.
   function ended(reason, clean) {
+    attempting = false;
     cad.disabled = true;
     toggle.textContent = 'Reconnect';
     if (/refused/i.test(reason)) {
-      status.textContent = 'Nothing is listening on port 5900 of this host. Install a VNC server there and set it to ' +
-        'accept connections from this machine only (docs/windows.md), then Reconnect.';
+      // Nothing answers on 5900. When headnode can switch the VNC server, that is
+      // most likely because it is switched off.
+      status.textContent = canSwitchVnc(latest)
+        ? 'VNC is switched off on this host. Press Start VNC to turn it on.'
+        : 'Nothing is listening on port 5900 of this host. Install a VNC server there and set it to ' +
+          'accept connections from this machine only (docs/windows.md), then Reconnect.';
     } else if (reason) {
       status.textContent = 'Disconnected: ' + reason;
+    } else if (!everConnected) {
+      // The tunnel worked (the VNC server accepted it) but the screen never appeared:
+      // the server hung up during the handshake, or a password was not given.
+      status.textContent = 'The VNC server closed the connection before the screen appeared. ' +
+        'Try Reconnect; if it keeps happening, see the VNC server\'s own log on the host.';
     } else {
       status.textContent = clean === false ? 'The connection was lost.' : 'Disconnected.';
     }
   }
+
+  // ---- Start / Stop VNC, and keeping up with the host's real state
+  function showPower() {
+    power.hidden = !canSwitchVnc(latest);
+    if (power.hidden) return;
+    const up = hasVnc(latest);
+    // A request is over when the host reports what was asked for (or after 20 s).
+    if (pending && (pending.enabled === up || Date.now() - pending.at > 20000)) pending = null;
+    power.disabled = pending !== null;
+    power.textContent = pending ? (pending.enabled ? 'Starting…' : 'Stopping…') : (up ? 'Stop VNC' : 'Start VNC');
+  }
+
+  power.addEventListener('click', async () => {
+    const enabled = !hasVnc(latest);
+    pending = { enabled, at: Date.now() };
+    showPower();
+    if (!enabled && rfb) rfb.disconnect(); // hang up first, instead of being cut off
+    const result = await api('POST', '/api/hosts/' + host.id + '/vnc', { enabled });
+    if (disposed) return;
+    if (!result.ok) {
+      pending = null;
+      status.textContent = plain(errorText(result));
+      showPower();
+    }
+  });
+
+  // This page is drawn once, so it asks for the host's state itself, every 2 seconds
+  // (like the Hosts page does). That is how the button learns that the VNC server
+  // really stopped or started, and how the screen appears by itself after Start VNC.
+  async function watchHost() {
+    const result = await api('GET', '/api/hosts/' + host.id);
+    if (disposed || !result.ok) return;
+    latest = result.data;
+    const up = hasVnc(latest);
+    showPower();
+    if (up && !wasUp && !rfb && !attempting) {
+      connect(); // it was switched on: show the screen
+    } else if (!up && wasUp && canSwitchVnc(latest)) {
+      status.textContent = 'VNC is switched off on this host. Press Start VNC to turn it on.';
+      cad.disabled = true;
+      toggle.textContent = 'Reconnect';
+    }
+    wasUp = up;
+  }
+  watcher = setInterval(watchHost, 2000);
+  showPower();
 
   toggle.addEventListener('click', () => {
     if (rfb) rfb.disconnect(); // ends the session on the host: the tunnel closes with it
