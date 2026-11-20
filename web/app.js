@@ -883,50 +883,22 @@ function renderScreenPage(host) {
   return page;
 }
 
-// TightVNC offers two ways to log in: the plain VNC password (security type 2) and
-// its own "Tight" type (16). noVNC prefers Tight, cannot complete it with TightVNC
-// ("No supported sub-auth types!"), and gives up, although the plain password would
-// work. This wraps the WebSocket so that noVNC never hears about type 16 when
-// another type is on offer (D-53). noVNC itself stays unmodified.
+// TightVNC announces its own "Tight" login type (security type 16) to any viewer
+// that speaks RFB 3.7 or 3.8, and offers nothing else. noVNC takes it, cannot
+// complete it with TightVNC ("No supported sub-auth types!"), and gives up, although
+// TightVNC does the plain VNC password too. RFB 3.3, the oldest version, has no
+// negotiation: the server just names the one login type it wants (the plain
+// password, or none). So this wraps the WebSocket and changes the server's version
+// banner "RFB 003.008" to "RFB 003.003" (D-53). noVNC, which supports 3.3, then
+// answers with 3.3, and the server follows suit. noVNC itself stays unmodified.
 //
-// Only one message is touched: the list of security types, which the server sends
-// right after the 12-byte version banner (RFB 3.7 and 3.8): one byte with the
-// count, then one byte per type. Everything else passes through unchanged. If the
-// list is only type 16, or is empty (an old 3.3 server, or an error message
-// follows), it is left alone.
-function hideTightSecurity(ws) {
-  let stage = 'banner'; // then 'types', then 'rest'
-  let bannerLeft = 12;
-  let list = [];        // the type list, collected until it is complete
-
-  function filter(bytes, emit) {
-    let i = 0;
-    if (stage === 'banner') {
-      const take = Math.min(bannerLeft, bytes.length);
-      emit(bytes.subarray(0, take));
-      bannerLeft -= take;
-      i = take;
-      if (bannerLeft === 0) stage = 'types';
-    }
-    if (stage === 'types' && i < bytes.length) {
-      list.push(...bytes.subarray(i));
-      i = bytes.length;
-      if (list.length > list[0]) { // the count byte and that many types have arrived
-        const types = list.slice(1, 1 + list[0]);
-        const kept = types.length > 1 ? types.filter((type) => type !== 16) : types;
-        emit(Uint8Array.from([kept.length, ...kept]));
-        const rest = list.slice(1 + list[0]);
-        if (rest.length > 0) emit(Uint8Array.from(rest));
-        list = [];
-        stage = 'rest';
-      }
-    } else if (stage === 'rest' && i < bytes.length) {
-      emit(bytes.subarray(i));
-    }
-  }
+// Only the first 12 bytes the server sends are touched: the version banner. Everything
+// after it, and everything the browser sends, passes through unchanged.
+function useOldestRfb(ws) {
+  let first = true;
 
   // A Proxy forwards everything to the real socket, except that the function noVNC
-  // installs to receive messages gets the filtered stream instead.
+  // installs to receive messages sees the changed banner.
   return new Proxy(ws, {
     get(target, prop) {
       const value = target[prop];
@@ -935,11 +907,20 @@ function hideTightSecurity(ws) {
     set(target, prop, value) {
       if (prop === 'onmessage' && typeof value === 'function') {
         target.onmessage = (event) => {
-          if (!(event.data instanceof ArrayBuffer)) {
-            value(event);
-            return;
+          if (first && event.data instanceof ArrayBuffer) {
+            first = false;
+            const bytes = new Uint8Array(event.data);
+            const banner = new TextDecoder().decode(bytes.subarray(0, 12));
+            // "RFB 003.008\n", "RFB 003.007\n", or a newer major version. A repeater's
+            // "RFB 000.000" and anything unexpected are left alone.
+            if (bytes.length >= 12 && /^RFB 00[3-9]\.\d{3}\n$/.test(banner) && banner !== 'RFB 003.003\n') {
+              const changed = bytes.slice(); // a copy: the original buffer belongs to the browser
+              changed.set(new TextEncoder().encode('RFB 003.003\n'));
+              value({ data: changed.buffer });
+              return;
+            }
           }
-          filter(new Uint8Array(event.data), (chunk) => value({ data: chunk.slice().buffer }));
+          value(event);
         };
       } else {
         target[prop] = value;
@@ -1029,7 +1010,7 @@ async function mountScreen(host, box, status, cad, toggle, power) {
     // Added before noVNC attaches its own handlers, so this runs first and the
     // reason is known by the time noVNC reports the disconnect.
     ws.addEventListener('close', (event) => { closeReason = plain(event.reason); });
-    rfb = new RFB(box, hideTightSecurity(ws), {});
+    rfb = new RFB(box, useOldestRfb(ws), {});
     rfb.scaleViewport = true;   // the whole screen, scaled to the window
     rfb.resizeSession = false;  // never change the host's own resolution
     rfb.background = '#111010';
