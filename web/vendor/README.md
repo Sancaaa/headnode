@@ -40,21 +40,21 @@ bundler, nothing built.
 into `web/vendor/novnc/` before it builds (D-52). The folder is not in git.
 
 **On your own computer**, only to run the server locally with the Screen page, run
-this from the project root in PowerShell. It downloads the same release from the npm
-registry and copies those folders (Windows 10 and later have `tar`; no Node.js needed):
+this from the project root in PowerShell. It downloads the same release from noVNC's
+GitHub and copies those folders (Windows 10 and later have `tar`; no Node.js needed):
 
 ```powershell
 $t = Join-Path $env:TEMP "novnc"
 Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $t | Out-Null
-Invoke-WebRequest https://registry.npmjs.org/@novnc/novnc/-/novnc-1.5.0.tgz -OutFile "$t\novnc.tgz"
+Invoke-WebRequest https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz -OutFile "$t\novnc.tgz"
 tar -xzf "$t\novnc.tgz" -C $t
 Remove-Item -Recurse -Force web\vendor\novnc -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force web\vendor\novnc | Out-Null
-Copy-Item -Recurse "$t\package\core" web\vendor\novnc\core
-Copy-Item -Recurse "$t\package\vendor" web\vendor\novnc\vendor
-Copy-Item "$t\package\LICENSE*" web\vendor\novnc\
-Copy-Item "$t\package\AUTHORS" web\vendor\novnc\ -ErrorAction SilentlyContinue
+Copy-Item -Recurse "$t\noVNC-1.5.0\core" web\vendor\novnc\core
+Copy-Item -Recurse "$t\noVNC-1.5.0\vendor" web\vendor\novnc\vendor
+Copy-Item "$t\noVNC-1.5.0\LICENSE*" web\vendor\novnc\
+Copy-Item "$t\noVNC-1.5.0\AUTHORS" web\vendor\novnc\ -ErrorAction SilentlyContinue
 ```
 
 The page loads `web/vendor/novnc/core/rfb.js`. Because noVNC's license (MPL-2.0)

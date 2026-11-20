@@ -94,17 +94,25 @@ ensure_novnc() {
     fi
     command -v curl >/dev/null 2>&1 || die "curl is needed to download noVNC: apt-get install -y curl"
     command -v tar >/dev/null 2>&1 || die "tar is needed to unpack noVNC: apt-get install -y tar"
-    say "Downloading the noVNC screen viewer $NOVNC_VERSION..."
+    say "Downloading the noVNC screen viewer $NOVNC_VERSION from GitHub..."
     tmp=$(mktemp -d) || die "cannot make a temporary folder"
-    # npm releases never change once published, so a pinned version is the same
+    # noVNC's own release on GitHub (its npm package is meant for bundlers and does
+    # not have the plain browser files). A tag is a pinned version, so it is the same
     # files every time. Unpacked in its own new folder: the download is not trusted.
-    curl -fsSL "https://registry.npmjs.org/@novnc/novnc/-/novnc-$NOVNC_VERSION.tgz" -o "$tmp/novnc.tgz" || { rm -rf "$tmp"; die "could not download noVNC"; }
-    tar -xzf "$tmp/novnc.tgz" -C "$tmp" || { rm -rf "$tmp"; die "could not unpack noVNC"; }
-    [ -f "$tmp/package/core/rfb.js" ] && [ -d "$tmp/package/vendor" ] || { rm -rf "$tmp"; die "the noVNC download does not look right (no core/rfb.js)"; }
+    mkdir "$tmp/x" || die "cannot make a temporary folder"
+    curl -fsSL "https://github.com/novnc/noVNC/archive/refs/tags/v$NOVNC_VERSION.tar.gz" -o "$tmp/novnc.tgz" || { rm -rf "$tmp"; die "could not download noVNC"; }
+    tar -xzf "$tmp/novnc.tgz" -C "$tmp/x" || { rm -rf "$tmp"; die "could not unpack noVNC"; }
+    src="$tmp/x/noVNC-$NOVNC_VERSION"
+    if [ ! -f "$src/core/rfb.js" ] || [ ! -d "$src/vendor" ]; then
+        say "What was downloaded:"
+        ls "$tmp/x" "$src" 2>&1 | sed 's/^/  /'
+        rm -rf "$tmp"
+        die "the noVNC download does not look right (no core/rfb.js and vendor/)"
+    fi
     rm -rf "$NOVNC_DIR"
     mkdir -p "$NOVNC_DIR" || die "cannot create $NOVNC_DIR"
-    cp -R "$tmp/package/core" "$tmp/package/vendor" "$NOVNC_DIR/" || { rm -rf "$tmp"; die "could not copy noVNC into place"; }
-    cp "$tmp"/package/LICENSE* "$tmp/package/AUTHORS" "$NOVNC_DIR/" 2>/dev/null || true
+    cp -R "$src/core" "$src/vendor" "$NOVNC_DIR/" || { rm -rf "$tmp"; die "could not copy noVNC into place"; }
+    cp "$src"/LICENSE* "$src/AUTHORS" "$NOVNC_DIR/" 2>/dev/null || true
     printf '%s\n' "$NOVNC_VERSION" > "$NOVNC_DIR/VERSION"
     rm -rf "$tmp"
 }

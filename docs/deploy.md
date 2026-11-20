@@ -16,7 +16,7 @@ sudo sh start.sh
 `start.sh` does, in this order, and says what it is doing:
 
 1. installs Go if the machine has none (it only needs a small starter Go: the project's own exact version is then downloaded by Go itself),
-2. downloads the noVNC screen viewer (a pinned release from the npm registry, into `web/vendor/novnc/`, which git ignores; D-52) if it is not there yet,
+2. downloads the noVNC screen viewer (a pinned release from noVNC's GitHub, into `web/vendor/novnc/`, which git ignores; D-52) if it is not there yet,
 3. builds the server and the agent programs (Linux amd64 and arm64),
 4. puts them in `/opt/headnode/` (owned by root, readable by everyone),
 5. creates a system user `headnode` and the private data folder `/var/lib/headnode` (mode `0700`),
