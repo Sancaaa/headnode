@@ -11,11 +11,12 @@ import (
 // not "whatever file is in the folder": the name comes from the URL, and an
 // allow-list means it can never be used to reach another file.
 //
-// Linux only for now (D-12). A new platform is one more line here and one more
-// build in scripts/build-agents.
+// Linux on amd64 and arm64, and Windows on amd64 (D-12, D-47). A new platform is
+// one more line here and one more build in scripts/build-agents.
 var agentBinaries = map[string]bool{
-	"headnode-agent-linux-amd64": true,
-	"headnode-agent-linux-arm64": true,
+	"headnode-agent-linux-amd64":       true,
+	"headnode-agent-linux-arm64":       true,
+	"headnode-agent-windows-amd64.exe": true,
 }
 
 // UseAgentDir says where the built agent programs are (the output of

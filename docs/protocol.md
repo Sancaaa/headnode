@@ -174,7 +174,7 @@ Status is kept in the server's memory (D-03) for 24 hours. A host whose control 
 |---|---|
 | `PATCH /api/hosts/{id}` | `200` + the updated host object. Body: `name` and/or `group_id`. See below. |
 | `DELETE /api/hosts/{id}` | `204`. The host's secret stops working immediately and a live control connection is closed. `404` if unknown. |
-| `POST /api/enroll-tokens` `{"group_id"}` | `201 {"token","expires_at","group_id","group_name","install_command"}` (`install_command` is `curl -fsSL <server>/install.sh \| sudo sh -s -- --token <token>`). `group_id` is a group id, or `null` or left out for **no group**. `404` if the group is unknown. The body must be a JSON object (`{}` is fine). |
+| `POST /api/enroll-tokens` `{"group_id"}` | `201 {"token","expires_at","group_id","group_name","install_command"}` (`install_command` is `curl -fsSL <server>/install.sh \| sudo sh -s -- --token <token>`; `install_command_windows` is `& ([scriptblock]::Create((irm <server>/install.ps1))) -Token <token>`). `group_id` is a group id, or `null` or left out for **no group**. `404` if the group is unknown. The body must be a JSON object (`{}` is fine). |
 
 `PATCH` body fields, both optional, at least one required (`400` otherwise):
 - `"name"`: the display name, 1-255 characters, no control characters. The `hostname` the agent reported does not change.
@@ -231,7 +231,7 @@ Rules for every other `/api/*` request:
 | `GET` (WS) | `/agent/sessions/{id}` | The agent's side of a session (§4) |
 | `GET` | `/agent/files/{id}` | Download a file for `fetch`. Served only to an agent that has a pending transfer of exactly that file (`404` for anyone else, `401` without credentials). Supports `Range`. |
 | `GET` | `/download/headnode-agent-{os}-{arch}` | The agent program for one platform. **No login**: see below. |
-| `GET` | `/install.sh` | The installer script, with this server's address filled in. **No login.** |
+| `GET` | `/install.sh`, `/install.ps1` | The installer script for Linux / for Windows, with this server's address filled in. **No login.** |
 
 Every agent endpoint except `enroll` and the installer downloads must carry `Authorization: Bearer <agent_id>.<agent_secret>`.
 
@@ -245,11 +245,23 @@ curl -fsSL https://headnode.example.com/install.sh | sudo sh -s -- --token <TOKE
 
 The server fills in its own address (`__SERVER__` in the script) from the request: the scheme comes from `X-Forwarded-Proto` behind Caddy and the host from the `Host` header. Because the client chooses the `Host` header, the address is checked against a strict pattern (a scheme, a host name or IP address, an optional port) and the request is refused with `400` if it does not match, so nothing can end the quotes the address sits in. The reply has `Cache-Control: no-store`. No login is needed, and the script holds no secret: the token is given on the command line.
 
-What the script does, as root, on Linux with systemd (`amd64` or `arm64`): downloads `/download/headnode-agent-linux-<arch>` to `/usr/local/bin/headnode-agent` (through a temporary file and an atomic rename, so a running agent is never replaced by half a file); if `/etc/headnode/agent.json` does not exist, enrolls with `--token` and saves it there (folder `0700`, file `0600`); then runs `headnode-agent service install`, which writes a systemd unit, enables it and restarts it. Run again **without** `--token` on a host that is enrolled, it only updates the program and restarts the service. All of it runs inside one function called on the last line, so a download that is cut short does nothing.
+What the script does, as root, on Linux with systemd (`amd64` or `arm64`): downloads `/download/headnode-agent-linux-<arch>` to `/usr/local/bin/headnode-agent` (through a temporary file and an atomic rename, so a running agent is never replaced by half a file); if `/etc/headnode/agent.json` does not exist, enrolls with `--token` and saves it there (folder `0700`, file `0600`); then runs `headnode-agent service install -user <name>`, which writes a systemd unit, enables it and restarts it. Run again **without** `--token` on a host that is enrolled, it only updates the program and restarts the service.
+
+**Who the agent runs as (D-48).** Installing needs root, but the agent does not run as root unless asked: it runs as the account given with `--user NAME`, and without it as the user who typed `sudo` (`$SUDO_USER`); an update keeps the account chosen at install time (the unit's `User=` line), and a script run from a root login with no `--user` runs the agent as root (the script says so). A terminal opened from the dashboard is that account's shell, and the file manager sees what that account may see. The credentials folder and file are owned by that account and private (`0700` / `0600`); the unit has `User=<name>` and `WorkingDirectory=~` (the account's home folder), and no `User=` line for root. The user name is checked (`[a-z_][a-z0-9_-]{0,31}`) before it goes in the unit file, and the account must exist. All of it runs inside one function called on the last line, so a download that is cut short does nothing.
+
+#### `GET /install.ps1` (M7)
+
+The same for Windows hosts (D-47): a PowerShell script, served with this server's address filled in, checked and cached exactly like `install.sh`. The dashboard's **Add host** shows it as the Windows command (`install_command_windows` in the enroll token reply):
+
+```powershell
+& ([scriptblock]::Create((irm https://headnode.example.com/install.ps1))) -Token <TOKEN>
+```
+
+Run in PowerShell opened as administrator, on 64-bit Windows. It downloads `/download/headnode-agent-windows-amd64.exe` to `C:\Program Files\headnode\headnode-agent.exe` (through a temporary file; a running service is stopped for the moment of the replacement, because Windows cannot overwrite a running program); if `C:\ProgramData\headnode\agent.json` does not exist, restricts that folder to `SYSTEM` and `Administrators` and enrolls with `-Token`; then runs `headnode-agent service install`, which registers the Windows service `headnode-agent` (automatic start, restart after a failure) and starts it. Run again without `-Token`, it only updates and restarts. The script is one script block that PowerShell reads completely before running, so a download cut short is a syntax error and does nothing. It reports errors with `throw`, never `exit`, because it runs inside the person's own window.
 
 #### `GET /download/headnode-agent-{os}-{arch}` (M6)
 
-The agent program, as `application/octet-stream`, for a platform the server has: `headnode-agent-linux-amd64` and `headnode-agent-linux-arm64` so far (Linux only, D-12). It needs no login, because a host that is about to enroll has nothing to log in with, and the install command has to fetch it first. That is safe because the program holds no secret: a host belongs to this server only through its enroll token. `Range` is supported, and `Cache-Control: no-cache` makes sure a rebuilt program reaches the next install.
+The agent program, as `application/octet-stream`, for a platform the server has: `headnode-agent-linux-amd64`, `headnode-agent-linux-arm64` and `headnode-agent-windows-amd64.exe` (the `.exe` is part of the name; D-12, D-47). It needs no login, because a host that is about to enroll has nothing to log in with, and the install command has to fetch it first. That is safe because the program holds no secret: a host belongs to this server only through its enroll token. `Range` is supported, and `Cache-Control: no-cache` makes sure a rebuilt program reaches the next install.
 
 | Status | When |
 |---|---|
@@ -323,6 +335,8 @@ Only one control connection per agent is kept. If the same agent connects again,
 ```
 If `protocol` does not match, the server closes the connection with reason `"protocol mismatch"`.
 The agent does not send its WAN IP. The server reads it from the connection address on every connect and stores it (`wan_addr` in the host object, §1). The `X-Forwarded-For` header is trusted only when the request comes from Caddy on localhost, and then its **last** entry is used (the one Caddy added, not anything the client wrote).
+
+A **Windows** agent (D-47) sends the same two messages with `"os": "windows"`. Its `platform` is the product name from the registry (`"Windows 11 Pro 23H2"`, with the usual "Windows 10" name of Windows 11 corrected from the build number), `kernel` is the system version (`"10.0.22631"`), and `cpu_model` is the processor name. In the heartbeat, `mem_used` is total minus *available* memory (like `MemAvailable` on Linux), the disk numbers are the system drive (usually `C:`), and `uptime_sec` is the time since boot. Nothing else in the protocol changes: the server and the dashboard treat it like any host, except that the page hides **Shell** and **Files** for `"os": "windows"` hosts, which have neither yet.
 
 **`heartbeat`**: every 20 seconds.
 ```json

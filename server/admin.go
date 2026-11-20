@@ -379,14 +379,17 @@ func (s *Server) handleCreateEnrollToken(w http.ResponseWriter, r *http.Request)
 	// service (M6). The token is on the command line, so it is visible to other
 	// users of that host while the command runs; it expires in 24 hours.
 	command := fmt.Sprintf("curl -fsSL %s/install.sh | sudo sh -s -- --token %s", serverURL(r), token)
+	// The same for a Windows host, in PowerShell opened as administrator (D-47).
+	windowsCommand := fmt.Sprintf("& ([scriptblock]::Create((irm %s/install.ps1))) -Token %s", serverURL(r), token)
 
 	w.Header().Set("Cache-Control", "no-store") // the reply holds a secret
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"token":           token,
-		"expires_at":      expiresAt.UTC(),
-		"group_id":        req.GroupID,
-		"group_name":      groupName,
-		"install_command": command,
+		"token":                   token,
+		"expires_at":              expiresAt.UTC(),
+		"group_id":                req.GroupID,
+		"group_name":              groupName,
+		"install_command":         command,
+		"install_command_windows": windowsCommand,
 	})
 }
 

@@ -1,0 +1,72 @@
+# Managing a Windows host
+
+A Windows host joins headnode like a Linux one and shows its **status** (online, CPU, memory, disk, uptime) in the dashboard. It has no terminal and no file manager yet. To control its **screen**, you run a normal VNC server on it, and reach that through headnode's tunnel with `hnctl`. headnode itself never touches the screen (D-44), so the VNC server does the work and headnode only carries the connection to it, from anywhere, without opening a port on the Windows machine.
+
+```
+  your laptop                    headnode server                 the Windows host
+  VNC viewer ── localhost:5900 ──► hnctl ══ tunnel ══► agent ──► VNC server (127.0.0.1:5900)
+```
+
+You need: 64-bit Windows 10 or 11 (or Server 2016 or later), a login with administrator rights on it, and an enroll token from the dashboard.
+
+## 1. Add the host
+
+In the dashboard: **Hosts → Add host**, pick a group, and copy the **Windows** command. On the Windows machine, open PowerShell **as administrator** (right-click, Run as administrator) and paste it:
+
+```powershell
+& ([scriptblock]::Create((irm https://headnode.example.com/install.ps1))) -Token <TOKEN>
+```
+
+It downloads the agent from your server into `C:\Program Files\headnode\`, enrolls the host, keeps the credentials in `C:\ProgramData\headnode\agent.json` (readable by the system and administrators only), and installs a Windows service called `headnode-agent` that starts at boot. The host is *online* in the dashboard within seconds.
+
+- **To update the agent**, run the same command again without `-Token`.
+- **To remove it**, in an administrator PowerShell: `& "C:\Program Files\headnode\headnode-agent.exe" service uninstall`, then delete the host in the dashboard.
+- **The agent's log** is `C:\ProgramData\headnode\agent.log`.
+- **Windows Defender or SmartScreen** may warn about the program because it is not signed. If it removes the file, add an exclusion for `C:\Program Files\headnode\`; if it only warns, the script still works.
+
+## 2. Install a VNC server, for loopback only
+
+headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
+
+**TightVNC** (free, tightvnc.com):
+
+1. Run the installer and choose a *Custom* install. Keep **TightVNC Server** and turn off the Viewer if you do not need it. Tick **Register TightVNC Server as a system service** (so it works at the login screen and after a reboot).
+2. When it asks, set a **remote access password** (and an administrative password). Use a long one.
+3. Open **TightVNC Server → Configuration** (Service Mode):
+   - on **Access Control**, tick **Allow only loopback connections** (some versions word it "Allow loopback connections" and "Only"; the point is that nothing but this same machine may connect);
+   - leave the port at `5900`.
+4. Windows Firewall: the installer may add a rule that allows port 5900 from the network. **Delete or disable it** (Windows Defender Firewall → Advanced settings → Inbound Rules → TightVNC). The tunnel connects from the machine itself, so it needs no rule.
+
+UltraVNC works too: in its server settings enable **Loopback Connections → Allow only loopback**, and set a password.
+
+Check it from the host itself, in PowerShell:
+
+```powershell
+Get-NetTCPConnection -LocalPort 5900 -State Listen | Select-Object LocalAddress, LocalPort
+```
+
+`LocalAddress` must say `127.0.0.1`, not `0.0.0.0`.
+
+## 3. Connect from your laptop
+
+On your own computer, log in once and forward a local port to the Windows host's VNC port (see `hnctl` in the main docs):
+
+```
+hnctl login -server https://headnode.example.com
+hnctl forward 5900:<host-name>:127.0.0.1:5900
+```
+
+Leave that running, and point any VNC viewer (TightVNC Viewer, RealVNC Viewer, UltraVNC Viewer, the viewer of your choice) at `localhost:5900`. Type the VNC password. You see the screen, including the **login screen**, because the VNC server runs as a service. If port 5900 is busy on your laptop, use another: `hnctl forward 5901:<host-name>:127.0.0.1:5900` and connect to `localhost:5901`.
+
+You need the **operator** role in the host's group, like for a terminal on a Linux host: the tunnel is as powerful as a shell (D-35).
+
+## Optional: RDP and SSH
+
+The same tunnel carries anything on the host's own loopback:
+
+- **RDP** (Windows Pro, Enterprise or Server only; the Home edition cannot be a host): enable Remote Desktop in Settings, then `hnctl forward 3389:<host-name>:127.0.0.1:3389` and open `mstsc` on `localhost:3389`. RDP is faster than VNC over a slow link. Windows listens for RDP on all addresses by default, so keep the firewall's default of blocking it from the internet.
+- **SSH**: install **OpenSSH Server** (Settings → Apps → Optional features), then `hnctl forward 2222:<host-name>:127.0.0.1:22` and `ssh -p 2222 <windows user>@localhost`. This gives you a command line.
+
+## What does not work on Windows yet
+
+The Hosts page hides **Shell** and **Files** for Windows hosts, because the agent has no terminal and file manager for Windows yet. Sending files to a Windows host from the Transfers page is not offered either. The screen in the browser (no separate viewer program) is planned as the next milestone.

@@ -1,17 +1,13 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package agent
 
-import (
-	"errors"
+import "headnode/protocol"
 
-	"headnode/protocol"
-)
-
-// Only Linux is implemented (D-12). These stubs exist so the agent package
-// still compiles on the Windows laptop, which means `go vet ./...` and
-// `go test ./...` work there. Running the agent on Windows fails with a clear error.
-var errUnsupported = errors.New("the agent only supports Linux for now")
+// Only Linux and Windows are implemented (D-12, D-47). These stubs keep the
+// agent package compiling on any other system (a Mac, say), so `go vet ./...`
+// still works there. Running the agent on one fails with a clear error.
+// (errUnsupported is in shell_other.go.)
 
 func readHostInfo() (protocol.Hello, error) {
 	return protocol.Hello{}, errUnsupported

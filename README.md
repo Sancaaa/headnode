@@ -27,6 +27,7 @@ The agent opens the connection to the server, not the other way around. That is 
 | [docs/principles.md](docs/principles.md) | Ground rules: YAGNI, code style, git | before writing code |
 | [docs/design.md](docs/design.md) | UI guide (minimal dashboard style) | you build a web page |
 | [docs/deploy.md](docs/deploy.md) | Run the server on a VPS behind Caddy, and add hosts with one command | you put it on the internet |
+| [docs/windows.md](docs/windows.md) | Add a Windows host, and reach its screen with VNC through a tunnel | you manage Windows machines |
 
 ## Components
 

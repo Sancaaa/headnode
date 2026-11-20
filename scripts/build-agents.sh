@@ -16,3 +16,9 @@ for arch in amd64 arm64; do
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "$target" ./cmd/headnode-agent
     echo "built $target"
 done
+
+# Windows: the program for Windows hosts (D-47). The .exe suffix is part of the
+# name the server serves.
+target="$out/headnode-agent-windows-amd64.exe"
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$target" ./cmd/headnode-agent
+echo "built $target"

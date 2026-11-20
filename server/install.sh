@@ -3,8 +3,12 @@
 #
 #   curl -fsSL __SERVER__/install.sh | sudo sh -s -- --token TOKEN
 #
+# The agent runs as the user who typed sudo, not as root: a terminal opened from
+# the dashboard is that user's shell, and the file manager sees what that user
+# may see. Use --user NAME to run it as someone else (--user root for root).
+#
 # Run it again, without --token, to update the agent of a host that is already
-# enrolled. It needs root, Linux with systemd, and curl or wget.
+# enrolled. It needs root (to install), Linux with systemd, and curl or wget.
 #
 # Everything happens inside main, which is called on the last line: if the
 # download of this script is cut short, the shell reaches the end of the file
@@ -14,15 +18,19 @@ SERVER='__SERVER__'
 BIN=/usr/local/bin/headnode-agent
 CONFIG_DIR=/etc/headnode
 CONFIG="$CONFIG_DIR/agent.json"
+UNIT=/etc/systemd/system/headnode-agent.service
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    say "usage: curl -fsSL $SERVER/install.sh | sudo sh -s -- [--token TOKEN]"
+    say "usage: curl -fsSL $SERVER/install.sh | sudo sh -s -- [--token TOKEN] [--user NAME]"
     say ""
     say "  --token TOKEN   the enroll token from the dashboard (Add host); needed the"
     say "                  first time. Without it, an enrolled host is only updated."
+    say "  --user NAME     the account the agent runs as: terminals and files from the"
+    say "                  dashboard are that user's. Default: the user who ran sudo"
+    say "                  (or, on an update, the one chosen before). root is allowed."
 }
 
 # fetch URL FILE: download with curl, or wget when there is no curl.
@@ -40,11 +48,17 @@ main() {
     set -eu
 
     TOKEN=''
+    RUN_USER=''
     while [ $# -gt 0 ]; do
         case "$1" in
             --token)
                 [ $# -ge 2 ] || die "--token needs a value"
                 TOKEN="$2"
+                shift 2
+                ;;
+            --user)
+                [ $# -ge 2 ] || die "--user needs a value"
+                RUN_USER="$2"
                 shift 2
                 ;;
             -h|--help) usage; exit 0 ;;
@@ -70,6 +84,25 @@ main() {
         die "this host is not enrolled yet: give --token"
     fi
 
+    # --- who the agent runs as. Whatever it runs as is what a terminal opened from
+    # the dashboard is: so by default it is the person who ran this, not root. An
+    # update keeps the choice made when it was installed.
+    if [ -z "$RUN_USER" ] && [ -f "$UNIT" ]; then
+        RUN_USER=$(sed -n 's/^User=//p' "$UNIT" | head -n 1)
+        [ -n "$RUN_USER" ] || RUN_USER=root    # an older unit with no User line ran as root
+    fi
+    [ -n "$RUN_USER" ] || RUN_USER="${SUDO_USER:-root}"
+    case "$RUN_USER" in
+        *[!a-z0-9_-]*|'') die "\"$RUN_USER\" is not a valid user name" ;;
+    esac
+    id "$RUN_USER" >/dev/null 2>&1 || die "the user $RUN_USER does not exist on this machine"
+    if [ "$RUN_USER" = "root" ]; then
+        say "The agent will run as root: terminals from the dashboard open as root."
+        say "(To run it as a normal user, run this again with --user NAME.)"
+    else
+        say "The agent will run as $RUN_USER: terminals and files from the dashboard are theirs."
+    fi
+
     # --- the program. Into a temporary file next to its final place, then moved
     # over it: the move is atomic, so a running agent is never replaced by half a
     # file, and a failed download leaves the old program where it was.
@@ -93,8 +126,14 @@ main() {
         chmod 0600 "$CONFIG"
     fi
 
+    # The credentials folder and file belong to whoever runs the agent: they are a
+    # secret, and the service could not read them otherwise.
+    chown "$RUN_USER" "$CONFIG_DIR" "$CONFIG"
+    chmod 0700 "$CONFIG_DIR"
+    chmod 0600 "$CONFIG"
+
     # --- start at boot, and start now
-    "$BIN" service install -config "$CONFIG"
+    "$BIN" service install -config "$CONFIG" -user "$RUN_USER"
     say ""
     say "Done. The host appears in the dashboard within a few seconds."
 }

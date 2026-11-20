@@ -92,12 +92,12 @@ Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at 
 Remote Windows is planned as two milestones (D-44). The idea: the agent never touches the screen. A normal VNC server on the host does that, listening on loopback only, and the agent reaches it with the `tunnel` session that already exists (D-35 stays as it is).
 
 ## M7 — Windows agent, minimal (D-12, D-44)
-- [ ] Windows system info (`sysinfo_windows.go`): hostname, OS version, CPU, RAM, disks, uptime
-- [ ] The agent runs as a Windows service: `headnode-agent service install|uninstall` on Windows
-- [ ] `windows/amd64` added to the build script and to the served agent list (D-40)
+- [ ] Windows system info (`sysinfo_windows.go`): hostname, OS version, CPU, RAM, disks, uptime (D-47)
+- [ ] The agent runs as a Windows service: `headnode-agent service install|uninstall` on Windows (D-47)
+- [ ] `windows/amd64` added to the build script and to the served agent list (D-40, D-47)
 - [ ] `install.ps1`: download the agent, enroll, install the service (same flow as `install.sh`)
 - [ ] Hosts page: Shell and Files are hidden for Windows hosts until they work there
-- [ ] Guide: TightVNC (or UltraVNC) on Windows, as a service, **loopback connections only**, with a password; optional: OpenSSH Server and RDP, reached with `hnctl forward`
+- [ ] Guide: TightVNC (or UltraVNC) on Windows, as a service, **loopback connections only**, with a password; optional: OpenSSH Server and RDP, reached with `hnctl forward` (`docs/windows.md`)
 
 **Done when:** a Windows host is added with one command and shows *online* with CPU/RAM/disk. `hnctl forward 5900:<host>:127.0.0.1:5900` plus a VNC viewer on the laptop controls its screen, including the login screen. On a Windows Pro host, `hnctl forward 3389:<host>:127.0.0.1:3389` plus `mstsc` opens RDP.
 

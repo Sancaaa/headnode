@@ -55,6 +55,8 @@ curl -fsSL https://headnode.example.com/install.sh | sudo sh -s -- --token <TOKE
 
 The host shows up within seconds. The same token works for other hosts for 24 hours.
 
+The agent runs as **the user who typed `sudo`**, not as root: a terminal opened from the dashboard is that user's shell, and the file manager sees what that user may see. To use another account, add `--user NAME` after the token (`--user root` if you really want root). Logged in as root with no `--user`, it runs as root.
+
 ## Updating
 
 ```sh

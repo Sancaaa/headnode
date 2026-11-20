@@ -327,6 +327,9 @@ body.logged-out .main { background: var(--bg-app); }
 .perm-grid { width: auto; margin-bottom: 12px; }
 .perm-grid td { padding: 6px 16px 6px 0; border-bottom: 0; vertical-align: middle; }
 
+/* the Add host dialog: one heading per operating system's command */
+.command-title { margin: 16px 0 0; font-size: 14px; font-weight: 600; }
+
 /* what the Send to hosts dialog is about to send */
 .staged { max-height: 160px; overflow-y: auto; padding: 8px 12px; background: var(--bg-app); border-radius: var(--radius); }
 

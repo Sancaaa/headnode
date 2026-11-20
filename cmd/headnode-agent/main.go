@@ -16,8 +16,15 @@ import (
 const usage = `usage:
   headnode-agent enroll -server URL -token TOKEN [-config agent.json]
   headnode-agent run [-config agent.json]
-  headnode-agent service install [-config /etc/headnode/agent.json]   start at boot (systemd, needs root)
-  headnode-agent service uninstall                                     remove that service`
+  headnode-agent service install [-config FILE] [-user NAME]
+                                                  start at boot: a systemd service on Linux (needs root),
+                                                  a Windows service on Windows (needs Administrator).
+                                                  -user: the Linux account the agent runs as (terminals and
+                                                  files are that user's); without it, root
+  headnode-agent service uninstall                remove that service
+
+The service's default credentials file is /etc/headnode/agent.json on Linux and
+%ProgramData%\headnode\agent.json on Windows.`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -63,15 +70,16 @@ func serviceCommand(args []string) {
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ExitOnError)
-	config := fs.String("config", "/etc/headnode/agent.json", "credentials file written by enroll")
+	config := fs.String("config", agent.DefaultConfigPath(), "credentials file written by enroll")
+	runUser := fs.String("user", "", "(install, Linux) the account the agent runs as: terminals and files are that user's. Default: root")
 	fs.Parse(args[1:])
 
 	switch args[0] {
 	case "install":
-		if err := agent.InstallService(*config); err != nil {
+		if err := agent.InstallService(*config, *runUser); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println("headnode-agent is installed as a service and running. Logs: journalctl -u headnode-agent -f")
+		fmt.Println("headnode-agent is installed as a service and running.", agent.LogHint())
 	case "uninstall":
 		if err := agent.UninstallService(); err != nil {
 			log.Fatal(err)
@@ -91,6 +99,15 @@ func runCommand(args []string) {
 	cfg, err := agent.LoadConfig(*config)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// Started by the Windows service manager: it has its own way to start and stop
+	// a program, and no console to log to (agent.RunService deals with both).
+	if agent.RunningAsService() {
+		if err := agent.RunService(cfg); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	// Ctrl+C (or `kill`) cancels ctx, which makes Run return cleanly.

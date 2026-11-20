@@ -376,8 +376,14 @@ function terminalHref(hostId) {
 // is online and the server says this user may open a shell on it (can_shell,
 // computed from the same role table as the server's check, so the button is
 // never offered to someone the server would refuse).
+// Windows hosts have no shell and no file manager yet (D-44, D-47): they are
+// managed with a VNC server through a tunnel. Their Shell and Files buttons and
+// tabs stay hidden until those work there, rather than open a page that can
+// only fail.
+const isWindows = (host) => host.os === 'windows';
+
 function shellButton(host) {
-  if (!host.online || !host.can_shell) return null;
+  if (!host.online || !host.can_shell || isWindows(host)) return null;
   // A real link styled as a button, so it works from the keyboard and opens in
   // a new tab with a middle click, like the other links.
   // ">_" is a shell prompt, drawn as plain text in the monospace font, so there
@@ -398,7 +404,7 @@ function shellButton(host) {
 // the host to be online, because a files session needs the agent. What the
 // person may then do is decided by the session itself (read-only or not).
 function filesButton(host) {
-  if (!host.online) return null;
+  if (!host.online || isWindows(host)) return null;
   const link = h('a', { class: 'btn btn-small', href: filesHref(host.id) }, icon(ICON_FOLDER), 'Files');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
@@ -466,10 +472,33 @@ function enrollResult(data) {
   const where = data.group_name
     ? 'The host joins the group "' + data.group_name + '".'
     : 'The host will have no group, so only administrators can see it until you move it to one.';
-  const code = h('div', { class: 'code-block' }, data.install_command);
+  return [
+    h('p', {}, 'Run one command on the host, in a terminal on that machine. It downloads the agent from this server, ' +
+      'connects the host and keeps it running (as a service, started at boot). ' + where),
+    h('h3', { class: 'command-title' }, 'Linux'),
+    commandBlock(data.install_command),
+    h('p', { class: 'sub' }, 'With systemd (x86-64 or ARM64). The agent runs as the user who types this (with sudo: ' +
+      'that user, not root), so a terminal opened from here is that user\'s shell. Add --user NAME at the end ' +
+      'to pick another account; logged in as root, the agent runs as root.'),
+    // Older servers do not send this one: the Linux command is then all there is.
+    // The list is spread, not nested: the dialog puts these in with replaceChildren,
+    // which does not flatten arrays (see openDialog).
+    ...(data.install_command_windows ? [
+      h('h3', { class: 'command-title' }, 'Windows'),
+      commandBlock(data.install_command_windows),
+      h('p', { class: 'sub' }, 'In PowerShell opened with "Run as administrator" (64-bit Windows). ' +
+        'Windows hosts show their CPU, memory and disk; their screen is reached with VNC (docs/windows.md).'),
+    ] : []),
+    h('p', { class: 'sub' }, 'The token is shown only now, is valid for 24 hours and works for several hosts.'),
+  ];
+}
+
+// A command in a code box, with its own Copy button.
+function commandBlock(command) {
+  const code = h('div', { class: 'code-block' }, command);
   const copy = button('Copy command', 'btn', async () => {
     try {
-      await navigator.clipboard.writeText(data.install_command);
+      await navigator.clipboard.writeText(command);
       copy.textContent = 'Copied';
     } catch (err) {
       // The clipboard API only works on https:// and localhost. Elsewhere,
@@ -481,14 +510,7 @@ function enrollResult(data) {
       copy.textContent = 'Press Ctrl+C';
     }
   });
-  return [
-    h('p', {}, 'Run this one command on the host, in a terminal on that machine. It downloads the agent from this server, ' +
-      'connects the host and keeps it running (as a service, started at boot). ' + where),
-    code,
-    copy,
-    h('p', { class: 'sub' }, 'Linux with systemd (x86-64 or ARM64). Leave out "sudo" if you are logged in as root. ' +
-      'The token is shown only now, is valid for 24 hours and works for several hosts.'),
-  ];
+  return h('div', {}, code, copy);
 }
 
 // ------------------------------------------------------- Host detail page
@@ -625,8 +647,16 @@ function openSocket(sessionId) {
 function hostTabs(host, active) {
   return h('nav', { class: 'tabs' },
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
-    h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
-    h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'));
+    isWindows(host) ? null : h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
+    isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'));
+}
+
+// What the Terminal and Files pages say when someone opens them for a Windows
+// host anyway (an old link, or the address typed by hand).
+function windowsNotice(host) {
+  return h('div', { class: 'notice' },
+    host.name + ' is a Windows host. It has no terminal or file manager yet: it is managed with a VNC server ' +
+    'through a tunnel (hnctl forward 5900:' + host.name + ':127.0.0.1:5900). See docs/windows.md.');
 }
 
 function renderTerminalPage(host) {
@@ -637,6 +667,10 @@ function renderTerminalPage(host) {
     h('div', { class: 'status' }, statusText(host)),
     hostTabs(host, 'terminal'),
   ];
+  if (isWindows(host)) {
+    page.push(windowsNotice(host));
+    return page;
+  }
   if (!host.online) {
     page.push(h('div', { class: 'notice' },
       'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
@@ -762,6 +796,10 @@ function renderFilesPage(host) {
     h('div', { class: 'status' }, statusText(host)),
     hostTabs(host, 'files'),
   ];
+  if (isWindows(host)) {
+    page.push(windowsNotice(host));
+    return page;
+  }
   if (!host.online) {
     page.push(h('div', { class: 'notice' },
       'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
@@ -2178,7 +2216,8 @@ function renderTransfer(transfer) {
 async function sendFileDialog(staged = []) {
   const hosts = await loadList('/api/hosts');
   if (!hosts) return;
-  const targets = hosts.filter((host) => host.can_files_write);
+  // Not Windows hosts: file transfers are untested there (paths, modes), see D-47.
+  const targets = hosts.filter((host) => host.can_files_write && !isWindows(host));
   if (targets.length === 0) {
     messageDialog('Send files', 'There are no hosts you may send files to. You need the operator role in a group that has hosts.');
     return;

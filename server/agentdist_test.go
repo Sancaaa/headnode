@@ -58,6 +58,24 @@ func TestAgentBinaryIsServedWithoutLogin(t *testing.T) {
 	}
 }
 
+// The Windows program has an .exe in its name, and that is the name that is served.
+func TestWindowsAgentIsServedByItsExeName(t *testing.T) {
+	s, srv, _, _ := newTestServer(t)
+	dir := t.TempDir()
+	s.UseAgentDir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "headnode-agent-windows-amd64.exe"), []byte("MZ pretend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := get(t, srv.URL+"/download/headnode-agent-windows-amd64.exe", nil)
+	if resp.StatusCode != http.StatusOK || body != "MZ pretend" {
+		t.Errorf("status = %d, body %q, want 200 and the program", resp.StatusCode, body)
+	}
+	// Without the suffix it is not a name on the list.
+	if resp, _ := get(t, srv.URL+"/download/headnode-agent-windows-amd64", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("without .exe: status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestAgentBinaryRefusesAnythingNotOnTheList(t *testing.T) {
 	s, srv, _, _ := newTestServer(t)
 	dir := t.TempDir()

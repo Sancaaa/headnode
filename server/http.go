@@ -122,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	// The agent program, for the install command. Public on purpose (see the handler).
 	mux.HandleFunc("GET /download/{name}", s.handleAgentBinary)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
+	mux.HandleFunc("GET /install.ps1", s.handleInstallScriptWindows)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	// The browser's WebSocket for a session. It is not under /api/, so it gets
 	// the login wrapper by hand. handleUISession adds the Origin check.
