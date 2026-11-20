@@ -176,7 +176,7 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
 
 The **Screen** tab (only for hosts whose agent reports a VNC server on 5900, like the **VNC** button on the row, D-50) shows the remote screen of a VNC server on the host's `127.0.0.1:5900`, drawn by noVNC on a `--terminal-bg` box that fills the window under a thin bar: connection status on the left, **Ctrl+Alt+Del** and **Disconnect / Reconnect** on the right. The screen is scaled to fit and the host's resolution is never changed. The VNC password is asked for in a dialog and is never stored. When nothing listens on port 5900 the bar says so and points at `docs/windows.md`.
 
-The **Terminal** always uses a dark `#111010` background inside a `--radius` box, regardless of theme, so terminal colors render correctly.
+The **Terminal** always uses a dark `#111010` background inside a `--radius` box, regardless of theme, so terminal colors render correctly. The Terminal and the Screen page each have a **Full screen** button (the browser's own full-screen mode on the box; the terminal or viewer resizes to fit). In full screen, where the browser allows it, the page keeps Esc (and on the Screen page Tab, Alt and the Windows key) for the host instead of leaving full screen: hold Esc to leave.
 
 ## 7. Interface copy
 

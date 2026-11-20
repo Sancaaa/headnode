@@ -272,6 +272,9 @@ body.logged-out .main { background: var(--bg-app); }
 }
 .terminal .xterm { height: 100%; }
 .terminal-bar { display: flex; align-items: center; gap: 12px; margin-top: 8px; min-height: 36px; }
+.terminal-bar .fullscreen { margin-left: auto; }
+/* In full screen the box is the whole screen: no fixed height, no rounded corners. */
+.terminal:fullscreen, .screen:fullscreen { height: 100vh; min-height: 0; border-radius: 0; }
 
 /* the host picker in the Send file dialog */
 .host-picker {

@@ -747,13 +747,47 @@ function renderTerminalPage(host) {
   const box = h('div', { class: 'terminal' });
   const status = h('span', { class: 'sub' });
   const reconnect = h('button', { class: 'btn', type: 'button', hidden: '' }, 'Reconnect');
-  page.push(box, h('div', { class: 'terminal-bar' }, status, reconnect));
+  // Escape is kept for the terminal in full screen (vim needs it), see fullscreenButton.
+  page.push(box, h('div', { class: 'terminal-bar' }, status, reconnect, fullscreenButton(box, ['Escape'])));
 
   // xterm measures its box to decide how many columns fit, so the box has to be
   // on the page first. This runs right after refresh() has inserted the nodes.
   queueMicrotask(() => mountTerminal(host, box, status, reconnect));
   return page;
 }
+
+// A button that shows the terminal or the remote screen in the browser's own full-screen
+// mode: `target` is the box that fills the screen, and the terminal or viewer inside it
+// resizes itself (both already follow their box's size). Esc leaves full screen, which
+// would be a problem for vim and for a remote desktop, so where the browser allows it
+// (Chrome and Edge; hold Esc to leave) the keys in lockKeys are kept for the page
+// while the box is full screen. Browsers without full screen get no button.
+function fullscreenButton(target, lockKeys) {
+  if (!document.fullscreenEnabled) return null;
+  const b = button('Full screen', 'btn btn-small fullscreen', async () => {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+    try {
+      await target.requestFullscreen();
+    } catch (err) {
+      return; // refused: nothing to do
+    }
+    try {
+      await navigator.keyboard.lock(lockKeys);
+    } catch (err) { /* no keyboard lock in this browser: Esc leaves full screen as usual */ }
+    // The click moved focus to the button: put it back where typing goes.
+    const typing = target.querySelector('textarea, canvas');
+    if (typing) typing.focus();
+  });
+  return b;
+}
+
+// Given back to the browser as soon as nothing is full screen any more.
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock();
+});
 
 // Text from the server that will be written into the terminal: control
 // characters are removed, so it cannot carry escape sequences that move the
@@ -877,7 +911,9 @@ function renderScreenPage(host) {
   // keeps asking for: this page is drawn once and the poll does not redraw it.
   const power = button('Stop VNC', 'btn btn-small', () => {});
   power.hidden = true; // until mountScreen knows that this host can be switched
-  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, power)), box);
+  // In full screen a remote desktop also gets Esc, Tab, Alt and the Windows key.
+  const fullscreen = fullscreenButton(box, ['Escape', 'Tab', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight']);
+  page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, power, fullscreen)), box);
 
   // Built after the box is on the page: noVNC measures it to scale the screen.
   queueMicrotask(() => mountScreen(host, box, status, cad, toggle, power));
