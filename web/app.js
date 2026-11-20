@@ -2722,7 +2722,7 @@ function renderLogin() {
   const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Log in');
 
   const form = h('form', { class: 'login' },
-    h('div', { class: 'org' }, h('div', { class: 'org-mark' }, 'HN'), 'headnode'),
+    h('div', { class: 'org' }, h('img', { class: 'org-logo', src: '/headnode-mark.svg', alt: '' }), 'headnode'),
     field('Username', username),
     field('Password', password),
     error,

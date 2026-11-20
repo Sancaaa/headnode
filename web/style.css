@@ -85,12 +85,8 @@ svg {
   display: flex; flex-direction: column;
 }
 .org { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; font-weight: 600; }
-.org-mark {
-  width: 24px; height: 24px; border-radius: var(--radius);
-  background: var(--text); color: var(--bg);
-  display: grid; place-items: center;
-  font-size: 11px; font-weight: 700; letter-spacing: 0;
-}
+/* The logo (docs/logo/README.md): never below 24 px, and one color in both themes. */
+.org-logo { width: 28px; height: 28px; flex: none; }
 .nav { flex: 1; padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; }
 .nav a {
   display: flex; align-items: center; gap: 10px;
