@@ -81,12 +81,15 @@ func trayReady(blue, grey []byte) {
 
 	status := systray.AddMenuItem("headnode", "")
 	status.Disable() // a line of text, not a command
+	version := systray.AddMenuItem("Version "+Version, "The version of this program")
+	version.Disable() // the same
 	systray.AddSeparator()
 	screen := systray.AddMenuItem("Start VNC", "Share this computer's screen with headnode")
 	screen.Hide() // until we know that TightVNC is installed
-	// On every version: the icon does not know whether an update exists, the dashboard does
-	// (M10, D-66). Windows hosts have no Shell tab, so this is how an update is started there.
+	// Windows hosts have no Shell tab, so this is how an update is started there (M10).
+	// It can be pressed only when the server has a newer version (D-68); its label says which.
 	update := systray.AddMenuItem("Update headnode…", "Install the newest headnode agent from your server (asks for an administrator, shows no window)")
+	update.Disable()
 	systray.AddSeparator()
 	exit := systray.AddMenuItem("Exit", "Turn headnode off and close this icon. Open headnode from the Start menu to bring it back.")
 
@@ -119,7 +122,15 @@ func trayLoop(status, screen, update, exit *systray.MenuItem, blue, grey []byte)
 			line = problem
 		}
 		status.SetTitle(line)
-		systray.SetTooltip("headnode: " + line)
+		systray.SetTooltip("headnode " + Version + ": " + line)
+		// The newest version comes from the agent, which asks the server (D-68).
+		label, canUpdate := updateView(Version, readLatest())
+		update.SetTitle(label)
+		if canUpdate {
+			update.Enable()
+		} else {
+			update.Disable()
+		}
 		if shownBlue == nil || *shownBlue != isBlue {
 			if isBlue {
 				systray.SetIcon(blue)

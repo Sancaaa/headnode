@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"headnode/protocol"
 )
 
 // The parts of the Windows tray icon (M9, D-57) that need no Windows: what the icon
@@ -58,6 +60,23 @@ func parseStatus(text string, now time.Time) bool {
 		return false
 	}
 	return now.Sub(time.Unix(at, 0)) <= statusStaleAfter
+}
+
+// ------------------------------------------------------------ whether an update is on offer
+
+// updateView is the label of the icon's Update headnode… item, and whether it can be
+// pressed (D-68): only when the server has a newer version than this program. latest is
+// what the agent last read from the server (it keeps it in the registry); "" or anything
+// that is not a version means it does not know, and then nothing is offered either.
+func updateView(current, latest string) (label string, enabled bool) {
+	const base = "Update headnode…"
+	if _, ok := protocol.ParseVersion(latest); !ok {
+		return base + " (no answer from the server yet)", false
+	}
+	if protocol.VersionOlder(current, latest) {
+		return base + " (" + latest + " is available)", true
+	}
+	return base + " (up to date)", false
 }
 
 // --------------------------------------------------------------- how an update went

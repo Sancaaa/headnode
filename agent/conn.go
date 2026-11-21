@@ -59,6 +59,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	// Before the first connection, so before any file session can start (D-62).
 	secretFile = cfg.Path
+	startLatestWatcher(ctx, cfg) // Windows: the newest version, for the tray icon's Update item (D-68)
 
 	attempt := 0
 	for {

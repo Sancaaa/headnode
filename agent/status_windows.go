@@ -3,9 +3,13 @@
 package agent
 
 import (
+	"context"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/registry"
+
+	"headnode/protocol"
 )
 
 // The one line that tells the tray icon whether the agent is connected (tray_logic.go)
@@ -38,6 +42,61 @@ func readStatus() string {
 	}
 	defer key.Close()
 	text, _, err := key.GetStringValue("Status")
+	if err != nil {
+		return ""
+	}
+	return text
+}
+
+// startLatestWatcher keeps the newest version that the server offers in the registry,
+// value Latest, for the tray icon (D-68): the icon decides from it whether its Update
+// headnode… item can be pressed. The icon cannot ask the server itself, because the
+// server's address is in the credentials file, which is private; the agent, which has
+// it, asks. Once at start (again after a minute if the server did not answer, as at
+// boot before the network is up), then every ten minutes.
+func startLatestWatcher(ctx context.Context, cfg Config) {
+	go func() {
+		for {
+			wait := time.Minute
+			if text, err := fetchText(cfg.Server + "/download/VERSION"); err == nil {
+				if version := strings.TrimSpace(text); isVersion(version) {
+					writeLatest(version)
+					wait = 10 * time.Minute
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+}
+
+func isVersion(text string) bool {
+	_, ok := protocol.ParseVersion(text)
+	return ok
+}
+
+// writeLatest records the newest version the server offers. Failing to write it only
+// costs the icon its Update item, so errors are not worth stopping for.
+func writeLatest(version string) {
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, statusKey, registry.SET_VALUE)
+	if err != nil {
+		return // not the service
+	}
+	defer key.Close()
+	key.SetStringValue("Latest", version)
+}
+
+// readLatest returns what writeLatest last wrote, or "" if nothing was.
+func readLatest() string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, statusKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	text, _, err := key.GetStringValue("Latest")
 	if err != nil {
 		return ""
 	}

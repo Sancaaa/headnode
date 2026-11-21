@@ -97,6 +97,27 @@ func assertNoRights(t *testing.T, what, rights string, forbidden ...string) {
 	}
 }
 
+func TestUpdateView(t *testing.T) {
+	tests := []struct {
+		current, latest string
+		label           string
+		enabled         bool
+	}{
+		{"0.11.0", "0.11.1", "Update headnode… (0.11.1 is available)", true},
+		{"0.9.2", "0.10.0", "Update headnode… (0.10.0 is available)", true}, // numbers, not letters
+		{"0.11.0", "0.11.0", "Update headnode… (up to date)", false},
+		{"0.12.0", "0.11.0", "Update headnode… (up to date)", false}, // a build newer than the server's is not "behind"
+		{"0.11.0", "", "Update headnode… (no answer from the server yet)", false},
+		{"0.11.0", "garbage", "Update headnode… (no answer from the server yet)", false},
+	}
+	for _, tc := range tests {
+		label, enabled := updateView(tc.current, tc.latest)
+		if label != tc.label || enabled != tc.enabled {
+			t.Errorf("updateView(%q, %q) = %q, %v; want %q, %v", tc.current, tc.latest, label, enabled, tc.label, tc.enabled)
+		}
+	}
+}
+
 func TestUpdateResult(t *testing.T) {
 	now := time.Unix(1_763_700_000, 0)
 	if got := updateResultLine(nil, now); got != "ok 1763700000" {
