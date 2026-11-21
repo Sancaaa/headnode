@@ -8,5 +8,5 @@ import "embed"
 // embedded as a whole directory, which also means the build fails if the
 // directory is missing: web/vendor/README.md is always there.
 //
-//go:embed index.html style.css app.js headnode-mark.svg vendor
+//go:embed index.html style.css app.js headnode-mark.svg sadaharu.jpg vendor
 var Files embed.FS

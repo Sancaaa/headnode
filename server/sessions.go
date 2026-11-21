@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,6 +111,24 @@ func (t *sessionTable) create(userID int64, agentID, kind string) (*session, err
 		}
 	})
 	return sess, nil
+}
+
+// endUser ends every session a user has, waiting or running, and returns how many. It is
+// what makes disabling a user, or resetting their password, cut off a shell that is open
+// right now (D-69): each running relay watches its session's done channel.
+func (t *sessionTable) endUser(userID int64) int {
+	t.mu.Lock()
+	var mine []*session
+	for _, sess := range t.byID {
+		if sess.userID == userID {
+			mine = append(mine, sess)
+		}
+	}
+	t.mu.Unlock()
+	for _, sess := range mine { // outside the lock: end takes it
+		t.end(sess)
+	}
+	return len(mine)
 }
 
 func (t *sessionTable) get(id string) *session {
@@ -426,7 +445,18 @@ func (s *Server) handleUISession(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("session started", "session", sess.id, "agent_id", sess.agentID, "user", u.Username)
 	started := time.Now()
-	relay(r.Context(), conn, agentConn)
+	// The relay also stops when the session is ended from outside (a user who is disabled
+	// or whose password is reset, D-69): sess.done closes, and that cancels the relay.
+	relayCtx, stopRelay := context.WithCancel(r.Context())
+	go func() {
+		select {
+		case <-sess.done:
+			stopRelay()
+		case <-relayCtx.Done():
+		}
+	}()
+	relay(relayCtx, conn, agentConn)
+	stopRelay()
 	s.sessions.end(sess)
 
 	duration := time.Since(started).Round(time.Second)

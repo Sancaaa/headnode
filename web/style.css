@@ -231,17 +231,27 @@ a.btn:hover { text-decoration: none; } /* a link styled as a button */
 .menu.user-menu { top: auto; bottom: 100%; left: 8px; right: 8px; min-width: 0; margin: 0 0 4px; }
 /* Log out is the one action here, and it ends the session: shown in the danger
    color like the other destructive actions (design.md §5). */
-.user-menu .menu-item { color: var(--danger-text); }
+.user-menu .menu-item:last-child { color: var(--danger-text); }
 /* the server's version and uptime, one quiet line under "headnode" */
 .org-text { line-height: 1.2; min-width: 0; }
 .org-version { font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .org-version:empty { display: none; }
 .user-name { font-weight: 500; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; }
+/* the picture every user has (D-69): a picture, cut to a circle */
 .avatar {
-  width: 28px; height: 28px; border-radius: 50%; flex: none;
-  background: var(--border-input); color: var(--text);
-  display: grid; place-items: center; font-size: 11px; font-weight: 600;
+  width: 28px; height: 28px; border-radius: 50%; flex: none; object-fit: cover;
+  background: var(--border-input);
 }
+
+/* the Profile page, and the Users page's buttons (M11) */
+.profile-head { display: flex; align-items: center; gap: 16px; margin: 8px 0 8px; }
+.profile-picture { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--border-input); }
+.profile-form { max-width: 420px; margin-bottom: 8px; }
+.profile-form .btn { margin-top: 16px; }
+.profile-actions { margin-top: 12px; }
+.form-ok { margin-top: 16px; color: var(--text-muted); }
+.user-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; }
+tr.user-disabled .name { color: var(--text-muted); text-decoration: line-through; }
 
 /* login page: a centered 360px form on the app background (design.md §6) */
 body.logged-out .sidebar { display: none; }

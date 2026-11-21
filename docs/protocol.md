@@ -78,7 +78,9 @@ Every route here answers `403 {"error":"admin only"}` to a logged-in non-admin.
 
 | Request | Reply |
 |---|---|
-| `GET /api/users` | `[{"id":1,"username":"admin","is_admin":true,"created_at":"…"}]` |
+| `GET /api/users` | `[{"id":1,"username":"admin","display_name":"","is_admin":true,"disabled":false,"created_at":"…"}]` |
+| `POST /api/users/{id}/password` `{"password"}` | `204` (M11, D-69). Gives the user a new password and ends **all** of that user's logins (browsers and `hnctl` tokens) and everything they have open (shells, file sessions, tunnels). `400` for a password that is not 8-72 bytes, `404` for an unknown user, `409` for the caller's own account (that needs the current password: `POST /api/me/password`). Audited as `password_reset` (never the password). |
+| `PATCH /api/users/{id}` `{"disabled"?, "is_admin"?}` | `200` + the user (M11, D-69). At least one field. `disabled: true` ends all of the user's logins and open sessions at once and stops them logging in (the login answer is the usual `401`, with a `login_failed … account disabled` line in the audit log); `false` lets them in again. `is_admin` grants or removes administrator rights. `409` when the caller disables or demotes **themselves**, and when the target is the **last enabled administrator** (checked in the same transaction as the change). `404` for an unknown user. A change that changes nothing is not audited. Audited as `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`. |
 | `POST /api/users` `{"username","password","is_admin"}` | `201` + the user. `400` for a bad username (1-32 of `a-z 0-9 . _ -`, lowercased) or a password that is not 8-72 bytes. `409` if the name is taken (case-insensitive). The reply never contains the password or its hash. |
 | `GET /api/groups` | `[{"id":1,"name":"Office","member_count":2,"host_count":3}]` |
 | `POST /api/groups` `{"name"}` | `201 {"id":1,"name":"Office","member_count":0,"host_count":0}`. `400` if the name is empty, longer than 64 characters or has control characters. `409` if it exists (case-insensitive). |
@@ -101,7 +103,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `password_change`, `password_reset`, `display_name_set`, `session_revoke`, `sessions_revoke_others`, `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
 
 #### Uploading and sending files (M4)
 
@@ -219,6 +221,22 @@ Set-Cookie: hn_session=<64 hex characters>; Path=/; Max-Age=604800; HttpOnly; Sa
 `POST /api/logout` → `204`. Deletes the session on the server and clears the cookie.
 
 `GET /api/me` → `{"id":1,"username":"admin","is_admin":true,"can_upload":true,"server_version":"0.1.0","server_started_at":"2026-11-20T08:00:00Z"}`. `can_upload` is true for an admin and for anyone who is an operator in at least one group; the page shows the Transfers link only to them. `server_version` and `server_started_at` feed the line under "headnode" at the top of the sidebar (`0.1.0 · up 3h 12m`): the server sends the moment it started and the browser counts the uptime, so nothing needs to be asked again.
+
+`me` also has `"display_name":"…"` (empty when none, in which case the page shows the username), and the login reply too.
+
+#### The Profile page (M11, D-69)
+
+Every user, for their own account only: none of these takes a user id, they act on whoever is logged in, so one user cannot reach another's.
+
+| Request | Reply |
+|---|---|
+| `PATCH /api/me` `{"display_name"}` | `200 {"display_name":"…"}`. The name is trimmed; up to 64 characters, no control characters; `""` clears it. `400` otherwise, or if the field is missing. The username never changes. Audited as `display_name_set`. |
+| `POST /api/me/password` `{"current","new"}` | `204`. Needs the current password. `400` if the new one is not 8-72 bytes or is the same; **`403`** if the current one is wrong (not `401`: the page takes that to mean "logged out"); `429` (with `Retry-After`) after too many wrong guesses, counted per user like a login's, so a stolen session cannot be used to guess the password. Afterwards every **other** login of the user, `hnctl` tokens included, is over; the one that made the request stays. Audited as `password_change` with `other_sessions_ended=N`. |
+| `GET /api/me/sessions` | `[{"id":7,"client":"browser","ip":"203.0.113.5","created_at":"…","last_used_at":"…","expires_at":"…","current":true}]`, the user's own logins that have not expired, newest first. `client` is `browser` or `cli` (hnctl). `id` is only a handle for the next route, not the token. `last_used_at` is written at most once a minute. |
+| `DELETE /api/me/sessions/{id}` | `204`. Signs out one of the user's own other logins. `404` for an unknown id **or somebody else's**; `400` for the session in use (that is logout). Audited as `session_revoke`. |
+| `POST /api/me/sessions/revoke-others` | `200 {"ended":2}`. "Sign out everywhere else": every login of the user but this one. Audited as `sessions_revoke_others`. |
+
+There is no profile picture upload: every user has the same placeholder, `/sadaharu.jpg`, a file of the web page like the logo.
 
 Rules for every other `/api/*` request:
 - No valid session → `401 {"error":"login required"}`. This also applies to paths that do not exist.

@@ -27,6 +27,7 @@ The agent opens the connection to the server, not the other way around. That is 
 | Forward a port from your laptop to a host (`ssh`, RDP, ...) | `hnctl forward` |
 | Add a host with one command | Hosts, Add host: a `curl ... \| sh` line for Linux, a PowerShell line for Windows |
 | Know which agents are out of date, and update them | An **Update available** tag on the Hosts page, with how to update that host: `sudo headnode update` on Linux, the tray icon's **Update headnode…** on Windows (the agent updates itself; you choose when) |
+| Manage accounts | A **Profile** page for everyone (change password, display name, see and sign out your logins) and, for administrators, resetting passwords, disabling users and giving admin rights on the Users page |
 | Audit who did what | Audit page |
 
 On a Windows host the person at the machine also gets a **tray icon** (see [docs/windows.md](docs/windows.md)): blue when connected, with **Exit** to turn headnode off completely, and a **headnode** app in the Start menu to turn it back on.

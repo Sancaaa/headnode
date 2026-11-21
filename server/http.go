@@ -81,10 +81,19 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/hosts/{id}", s.handleGetHost)
 	api.HandleFunc("GET /api/me", s.handleMe)
 	api.HandleFunc("POST /api/logout", s.handleLogout)
+	// The Profile page (M11, D-69): every user, for their own account only. None takes a
+	// user id: they all act on currentUser, so one user cannot reach another's.
+	api.HandleFunc("PATCH /api/me", s.handlePatchMe)
+	api.HandleFunc("POST /api/me/password", s.handleChangePassword)
+	api.HandleFunc("GET /api/me/sessions", s.handleListMySessions)
+	api.HandleFunc("POST /api/me/sessions/revoke-others", s.handleRevokeOtherSessions)
+	api.HandleFunc("DELETE /api/me/sessions/{id}", s.handleRevokeMySession)
 	// Admin-only routes. adminOnly is a second, narrower check on top of the
 	// login wrapper, so a test (TestAdminRoutesRequireAdmin) lists every one.
 	api.HandleFunc("GET /api/users", s.adminOnly(s.handleListUsers))
 	api.HandleFunc("POST /api/users", s.adminOnly(s.handleCreateUser))
+	api.HandleFunc("POST /api/users/{id}/password", s.adminOnly(s.handleResetPassword))
+	api.HandleFunc("PATCH /api/users/{id}", s.adminOnly(s.handlePatchUser))
 	api.HandleFunc("GET /api/groups", s.adminOnly(s.handleListGroups))
 	api.HandleFunc("POST /api/groups", s.adminOnly(s.handleCreateGroup))
 	api.HandleFunc("GET /api/groups/{id}", s.adminOnly(s.handleGetGroup))

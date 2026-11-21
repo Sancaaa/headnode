@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Milestones M0 to M9 are done: version 1. M10 (update notice) is built and waits for its test below.** What may come next is in "After the MVP" at the end.
+**Milestones M0 to M10 are done: version 1. M11 (accounts) is built and waits for its test below.** What may come next is in "After the MVP" at the end.
 
 ---
 
@@ -138,7 +138,31 @@ The idea: the installers already update a host (run the install command again wi
 
 **Done when:** after building a newer agent into `dist/`, the hosts with the older version show *Update available* without restarting the server; running the command from the dialog (`sudo headnode update` on a Linux host) makes its badge disappear after it reconnects. On a Windows host, **Update headnode…** in the tray, after the administrator prompt and with no window, does the same and leaves one blue icon. Running `sudo headnode update` again says the host is up to date and changes nothing.
 
+## M11 — Accounts: the last MVP slice (D-69)
+The idea: today a password is set once, when the user is created, and never again; and `hnctl` tokens cannot be revoked from the dashboard (D-36). Fix the account basics. No picture upload: everyone gets one placeholder picture.
+
+**Before building:** put the picture at **`web/sadaharu.jpg`** (next to `headnode-mark.svg`). It is compiled into the server like the logo, so the build fails until the file is there.
+
+**Profile page (every user, for themselves)**
+- [x] Change password: the current password is required; afterwards every **other** session of that user ends, `hnctl` tokens included; audited
+- [x] Display name (optional), shown in the sidebar instead of the username; the username itself never changes
+- [x] Logged-in sessions: browsers and `hnctl` tokens, with when they were last used, and **Sign out everywhere else** (each one can also be signed out on its own)
+- [x] Reached by clicking the user block at the bottom of the sidebar (its menu: Profile, Log out)
+
+**Users page (admin)**
+- [x] Reset a user's password (ends all of that user's sessions)
+- [x] Disable / enable a user instead of deleting: a disabled user cannot log in, and their sessions, tokens and open shells end at once
+- [x] Make admin / remove admin
+- [x] Guards: nobody can disable or demote themselves, and the last enabled admin cannot be disabled or demoted
+- [x] Every change above is in the audit log
+
+**Picture**
+- [x] `web/sadaharu.jpg` added to the `//go:embed` line in `web/embed.go` and served like the logo
+- [x] The sidebar user block and the Profile page show it for **every** user, in place of the initials
+
+**Done when:** a user changes their password and their other browser and `hnctl` are logged out; an admin disables a user and that user's open shell closes and login fails; the last admin cannot remove their own admin rights; every one of these appears in the audit log; the sidebar shows the placeholder picture and the display name.
+
 ---
 
 ## After the MVP (not scheduled)
-To be chosen later by the project owner: shell and file manager on Windows, RDP in the browser, one-click agent update from the dashboard (A3, see D-66 for what it needs first), 2FA (C3), session recording (C6), Telegram notifications (D2), HTTP web relay (B7), bulk commands (B8), CCTV (B15).
+To be chosen later by the project owner: shell and file manager on Windows, RDP in the browser, one-click agent update from the dashboard (A3, see D-66 for what it needs first), 2FA (C3, its settings would live on the Profile page of M11), profile picture upload (D-69), session recording (C6), Telegram notifications (D2), HTTP web relay (B7), bulk commands (B8), CCTV (B15).

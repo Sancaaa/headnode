@@ -2373,6 +2373,13 @@ function mountFiles(host, box) {
 
 // ------------------------------------------------------------- Users page
 
+// The one picture every user has (D-69): there is no upload, so the same file is
+// shown for everybody, in the sidebar and on the Profile page.
+const PICTURE = '/sadaharu.jpg';
+
+// What a person is called on screen: their display name, or else their username.
+const displayName = (user) => user.display_name || user.username;
+
 function renderUsers(users) {
   return [
     pageHead('Users', 'People who can log in to headnode.', button('Add user', 'btn btn-primary', addUserDialog)),
@@ -2381,13 +2388,66 @@ function renderUsers(users) {
       h('thead', {}, h('tr', {},
         h('th', {}, 'Username'),
         h('th', {}, 'Role'),
-        h('th', {}, 'Created'))),
-      h('tbody', {}, users.map((u) => h('tr', { class: 'static' },
-        h('td', {}, h('span', { class: 'name' }, u.username), u.id === me.id ? h('span', { class: 'tag' }, 'you') : null),
+        h('th', {}, 'Created'),
+        h('th', { class: 'col-act' }, 'Action'))),
+      h('tbody', {}, users.map((u) => h('tr', { class: u.disabled ? 'static user-disabled' : 'static' },
+        h('td', {},
+          h('span', { class: 'name' }, u.username),
+          u.id === me.id ? h('span', { class: 'tag' }, 'you') : null,
+          u.disabled ? h('span', { class: 'tag' }, 'Disabled') : null,
+          // A display name is only a label: the username is what the audit log shows.
+          u.display_name ? h('div', { class: 'sub' }, u.display_name) : null),
         h('td', {}, u.is_admin ? 'Administrator' : 'User'),
-        h('td', { class: 'sub', title: new Date(u.created_at).toLocaleString() }, relativeTime(u.created_at)))))),
-    h('p', { class: 'sub note' }, 'Administrators see every host and manage users and groups. Everyone else sees only the hosts in their groups.'),
+        h('td', { class: 'sub', title: new Date(u.created_at).toLocaleString() }, relativeTime(u.created_at)),
+        // A wrapper inside the cell: "display: flex" on a td itself would stop it being a table cell.
+        h('td', { class: 'col-act' }, h('div', { class: 'user-actions' }, ...userActions(u))))))),
+    h('p', { class: 'sub note' }, 'Administrators see every host and manage users and groups. Everyone else sees only the hosts in their groups. ' +
+      'A disabled user cannot log in, and is logged out at once, shells included; nothing is deleted, so the audit log still names them.'),
   ];
+}
+
+// The buttons of a user's row. Nobody can disable or demote themselves, or reset their own
+// password here (that asks for the current one, on the Profile page): the server refuses it
+// too (D-69), so these are only left out so as not to offer what would be refused.
+function userActions(u) {
+  if (u.id === me.id) return [h('span', { class: 'sub' }, 'Your Profile page has your own account')];
+  const set = (fields) => api('PATCH', '/api/users/' + u.id, fields);
+  return [
+    button('Reset password', 'btn btn-small', () => resetPasswordDialog(u)),
+    button(u.is_admin ? 'Remove admin' : 'Make admin', 'btn btn-small', () => confirmDialog({
+      title: (u.is_admin ? 'Remove administrator rights from ' : 'Make ') + u.username + (u.is_admin ? '?' : ' an administrator?'),
+      message: u.is_admin
+        ? u.username + ' will see only the hosts in their groups, and can no longer manage users, groups or uploads.'
+        : u.username + ' will see every host, and can manage users, groups and uploads.',
+      confirmLabel: u.is_admin ? 'Remove admin' : 'Make admin',
+      onConfirm: () => set({ is_admin: !u.is_admin }),
+    })),
+    button(u.disabled ? 'Enable' : 'Disable', u.disabled ? 'btn btn-small' : 'btn btn-small danger-text', () => confirmDialog({
+      title: (u.disabled ? 'Enable ' : 'Disable ') + u.username + '?',
+      message: u.disabled
+        ? u.username + ' will be able to log in again, with the password they had.'
+        : u.username + ' cannot log in any more, and is logged out now: their browsers, their hnctl tokens, and every shell, ' +
+          'file session and tunnel they have open end at once. Nothing is deleted.',
+      confirmLabel: u.disabled ? 'Enable' : 'Disable',
+      onConfirm: () => set({ disabled: !u.disabled }),
+    })),
+  ];
+}
+
+function resetPasswordDialog(u) {
+  const password = h('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '72' });
+  openDialog({
+    title: 'Reset the password of ' + u.username,
+    fields: [
+      h('p', {}, 'Choose a new password and give it to ' + u.username + '. All their sessions end now: their browsers, their hnctl tokens and what they have open.'),
+      field('New password (8 to 72 characters)', password),
+    ],
+    submitLabel: 'Reset password',
+    onSubmit: async () => {
+      const result = await api('POST', '/api/users/' + u.id + '/password', { password: password.value });
+      return result.ok ? null : errorText(result);
+    },
+  });
 }
 
 function addUserDialog() {
@@ -2412,6 +2472,140 @@ function addUserDialog() {
       return result.ok ? null : errorText(result);
     },
   });
+}
+
+// ------------------------------------------------------------- Profile page
+
+// A person's own account (M11, D-69): display name, password, and the logins that are
+// open. Static, like the terminal: it holds forms, and the 2-second poll must not
+// redraw them while someone types. It loads and redraws its own list of sessions.
+function renderProfile() {
+  document.title = 'Profile · headnode';
+  const sessionsBox = h('div', {});
+  queueMicrotask(() => loadSessions(sessionsBox));
+  return [
+    pageHead('Profile', 'Your own account.', null),
+    h('div', { class: 'profile-head' },
+      h('img', { class: 'profile-picture', src: PICTURE, alt: '' }),
+      h('div', {},
+        h('div', { class: 'name' }, displayName(me)),
+        h('div', { class: 'sub' }, me.username + ' · ' + (me.is_admin ? 'Administrator' : 'User')))),
+    h('h2', {}, 'Display name'),
+    profileNameForm(),
+    h('h2', {}, 'Password'),
+    profilePasswordForm(() => loadSessions(sessionsBox)),
+    h('h2', {}, 'Where you are logged in'),
+    sessionsBox,
+  ];
+}
+
+// A message under a form: plain, or red when it is an error.
+function formMessage() {
+  const box = h('div', { role: 'status' });
+  box.show = (text, isError) => {
+    box.textContent = text;
+    box.className = isError ? 'form-error' : 'form-ok';
+  };
+  return box;
+}
+
+function profileNameForm() {
+  const input = h('input', { class: 'input', name: 'display_name', autocomplete: 'off', maxlength: '64', placeholder: me.username, value: me.display_name || '' });
+  const message = formMessage();
+  const save = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Save');
+  const form = h('form', { class: 'profile-form' },
+    field('Shown in the sidebar instead of your username (optional). The username itself never changes: the audit log shows it.', input),
+    message, save);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    const result = await api('PATCH', '/api/me', { display_name: input.value });
+    save.disabled = false;
+    if (!result.ok) {
+      message.show(errorText(result), true);
+      return;
+    }
+    me.display_name = result.data.display_name;
+    renderUserBox(); // the sidebar changes at once
+    message.show('Saved.', false);
+  });
+  return form;
+}
+
+function profilePasswordForm(reloadSessions) {
+  const current = h('input', { class: 'input', name: 'current', type: 'password', autocomplete: 'current-password', required: '' });
+  const next = h('input', { class: 'input', name: 'new', type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '72' });
+  const again = h('input', { class: 'input', name: 'again', type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '72' });
+  const message = formMessage();
+  const save = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password');
+  const form = h('form', { class: 'profile-form' },
+    field('Current password', current),
+    field('New password (8 to 72 characters)', next),
+    field('New password again', again),
+    message, save);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (next.value !== again.value) {
+      message.show('The two new passwords are not the same.', true);
+      return;
+    }
+    save.disabled = true;
+    const result = await api('POST', '/api/me/password', { current: current.value, new: next.value });
+    save.disabled = false;
+    if (!result.ok) {
+      message.show(errorText(result), true);
+      return;
+    }
+    form.reset();
+    message.show('Password changed. Every other login of yours was signed out.', false);
+    reloadSessions(); // they are gone from the list
+  });
+  return form;
+}
+
+// The logins of this user: browsers, and hnctl tokens. Each can be signed out, except the
+// one in use (that is Log out), and all the others at once.
+async function loadSessions(box) {
+  const result = await api('GET', '/api/me/sessions');
+  if (!result.ok) {
+    box.replaceChildren(h('div', { class: 'form-error' }, errorText(result)));
+    return;
+  }
+  const list = result.data;
+  const reload = () => loadSessions(box);
+  const others = list.filter((s) => !s.current).length;
+
+  const signOutOthers = button('Sign out everywhere else', 'btn', () => confirmDialog({
+    title: 'Sign out everywhere else?',
+    message: 'Every other browser and hnctl login of yours ends now. This one stays.',
+    confirmLabel: 'Sign out',
+    onConfirm: async () => {
+      const done = await api('POST', '/api/me/sessions/revoke-others');
+      if (done.ok) reload();
+      return done;
+    },
+  }));
+  signOutOthers.disabled = others === 0;
+
+  box.replaceChildren(
+    h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Where'),
+        h('th', {}, 'Address'),
+        h('th', {}, 'Logged in'),
+        h('th', {}, 'Last used'),
+        h('th', { class: 'col-act' }, ''))),
+      h('tbody', {}, list.map((s) => h('tr', { class: 'static' },
+        h('td', {}, s.client === 'cli' ? 'hnctl (command line)' : 'Browser', s.current ? h('span', { class: 'tag' }, 'this one') : null),
+        h('td', { class: 'sub' }, s.ip || '—'),
+        h('td', { class: 'sub', title: new Date(s.created_at).toLocaleString() }, relativeTime(s.created_at)),
+        h('td', { class: 'sub', title: new Date(s.last_used_at).toLocaleString() }, relativeTime(s.last_used_at)),
+        h('td', { class: 'col-act' }, s.current ? null : button('Sign out', 'btn btn-small', async (event) => {
+          event.target.disabled = true;
+          await api('DELETE', '/api/me/sessions/' + s.id);
+          reload();
+        })))))),
+    h('div', { class: 'profile-actions' }, signOutOthers));
 }
 
 // ------------------------------------------------------------ Groups pages
@@ -2558,6 +2752,15 @@ const AUDIT_LABELS = {
   host_delete: 'Host deleted',
   session_open: 'Session opened',
   session_close: 'Session closed',
+  password_change: 'Password changed',
+  password_reset: 'Password reset',
+  display_name_set: 'Display name changed',
+  session_revoke: 'Login signed out',
+  sessions_revoke_others: 'Signed out everywhere else',
+  user_disable: 'User disabled',
+  user_enable: 'User enabled',
+  admin_grant: 'Administrator rights given',
+  admin_revoke: 'Administrator rights removed',
   vnc_on: 'VNC server started',
   vnc_off: 'VNC server stopped',
   file_download: 'File downloaded',
@@ -3010,12 +3213,14 @@ function renderUserBox() {
     renderServerLine(); // clears it
     return;
   }
-  // Only the user is shown. Their name is a button: clicking it opens a small
-  // menu with Log out, so a stray click cannot log anyone out.
+  // Only the user is shown: the placeholder picture every user has (D-69), their
+  // display name or else their username, and their role. The block is a button:
+  // clicking it opens a small menu with Profile and Log out, so a stray click cannot
+  // log anyone out.
   const trigger = h('button', { class: 'user user-button', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
-    h('div', { class: 'avatar' }, me.username.slice(0, 2).toUpperCase()),
+    h('img', { class: 'avatar', src: PICTURE, alt: '' }),
     h('div', { class: 'user-text' },
-      h('div', { class: 'user-name' }, me.username),
+      h('div', { class: 'user-name' }, displayName(me)),
       h('div', { class: 'sub' }, me.is_admin ? 'Administrator' : 'User')));
   trigger.addEventListener('click', () => {
     if (userMenu) closeUserMenu();
@@ -3036,7 +3241,9 @@ function openUserMenu(box, trigger) {
     lastKey = null;
     refresh(); // the server now answers 401, which shows the login form
   });
-  userMenu = h('div', { class: 'menu user-menu', role: 'menu' }, logout);
+  const profile = h('a', { class: 'menu-item', href: '#/profile', role: 'menuitem' }, 'Profile');
+  profile.addEventListener('click', () => closeUserMenu());
+  userMenu = h('div', { class: 'menu user-menu', role: 'menu' }, profile, logout);
   box.append(userMenu);
   trigger.setAttribute('aria-expanded', 'true');
 }
@@ -3094,6 +3301,8 @@ const routes = [
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/files$/, url: (m) => '/api/hosts/' + m[1], render: renderFilesPage, nav: '#/', title: 'Files', static: true },
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/screen$/, url: (m) => '/api/hosts/' + m[1], render: renderScreenPage, nav: '#/', title: 'Screen', static: true },
   { pattern: /^#\/users$/, url: () => '/api/users', render: renderUsers, nav: '#/users', title: 'Users' },
+  // static: it holds forms, which the 2-second poll must not redraw while someone types.
+  { pattern: /^#\/profile$/, url: () => '/api/me', render: renderProfile, nav: '', title: 'Profile', static: true },
   { pattern: /^#\/groups\/(\d+)$/, url: (m) => '/api/groups/' + m[1], render: renderGroup, nav: '#/groups', title: 'Group' },
   { pattern: /^#\/groups$/, url: () => '/api/groups', render: renderGroups, nav: '#/groups', title: 'Groups' },
   { pattern: /^#\/uploads$/, url: () => '/api/files', render: renderUploads, nav: '#/uploads', title: 'Uploads' },

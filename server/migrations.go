@@ -27,6 +27,18 @@ var migrations = []string{
 		uploaded_by INTEGER NOT NULL,
 		created_at  INTEGER NOT NULL
 	)`,
+
+	// M11: accounts (D-69). A name for the sidebar (the username, which the audit
+	// log shows, never changes), and "disabled" instead of deleting a user, so every
+	// audit line still points at a real row.
+	`ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`,
+	// What the Profile page shows about each login: when it was last used, which
+	// kind of client it is ('browser' or 'cli', that is hnctl), and where it came
+	// from. 0 and '' are what a session from before this change has.
+	`ALTER TABLE web_sessions ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE web_sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'browser'`,
+	`ALTER TABLE web_sessions ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate brings the database up to date. It runs every time the server (or a

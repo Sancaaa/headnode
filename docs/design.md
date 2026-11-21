@@ -124,7 +124,7 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
   --bg-app
 ```
 
-- **Sidebar** (240px, `--bg-app`, right border): the org/app name at the top, nav in the middle, only the user block (avatar, name, role) at the bottom behind a top border. The server's version and uptime sit under the app name at the top (the server line, §5), and Log out is in a menu that opens from the user block.
+- **Sidebar** (240px, `--bg-app`, right border): the org/app name at the top, nav in the middle, only the user block (avatar, name, role) at the bottom behind a top border. The server's version and uptime sit under the app name at the top (the server line, §5), and a menu opens from the user block with **Profile** and, in the danger color, **Log out**. The avatar is a picture, the same for every user (`/sadaharu.jpg`, D-69), and the name beside it is the user's display name, or else their username. The **Profile** page (`#/profile`, drawn once like the terminal, because it holds forms) has the picture and name, a display-name form, a change-password form (current, new, new again), and a table of the user's logins with a *Sign out* button per row and *Sign out everywhere else*. On the **Users** page each row (except your own) has *Reset password*, *Make admin* / *Remove admin* and *Disable* / *Enable* buttons; a disabled user's name is struck through and tagged *Disabled*.
 - **Nav items**: icon + label, 32px tall, 6px radius. Active = `--bg-active` background + weight 500. Hover = `--bg-active` background.
 - **Nested nav** (for Admin): children indented and connected by a 1px vertical guide line in `--border-input`.
 - **Main**: `--bg`, padding 32px 40px (24px on small screens), content max width 1280px.

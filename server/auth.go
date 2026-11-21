@@ -46,6 +46,12 @@ type user struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
 	IsAdmin  bool   `json:"is_admin"`
+	// What the sidebar shows instead of the username when it is set (D-69). The
+	// username itself never changes: the audit log shows it.
+	DisplayName string `json:"display_name"`
+	// Only checkPassword sets it: the password was right, but the account is disabled.
+	// Unexported, so it is never in a reply.
+	disabled bool
 }
 
 // userKey is the context key for the logged-in user. It is its own unexported
@@ -109,10 +115,10 @@ func (s *Server) checkPassword(username, password string) (user, bool, error) {
 
 	var u user
 	var hash string
-	var admin int
+	var admin, disabled int
 	err := s.db.QueryRow(
-		`SELECT id, username, password_hash, is_admin FROM users WHERE username = ?`, username,
-	).Scan(&u.ID, &u.Username, &hash, &admin)
+		`SELECT id, username, password_hash, is_admin, display_name, disabled FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &hash, &admin, &u.DisplayName, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Compare against a dummy hash anyway. Otherwise "no such user" would
 		// answer in 1 ms and "wrong password" in 50 ms, and the difference
@@ -128,21 +134,32 @@ func (s *Server) checkPassword(username, password string) (user, bool, error) {
 		return user{}, false, nil
 	}
 	u.IsAdmin = admin == 1
+	// A disabled user cannot log in (D-69). The password is checked first, so the
+	// answer takes as long as any other, and the caller can tell the audit log that it
+	// was a disabled account, while the person at the keyboard gets the same message.
+	if disabled == 1 {
+		u.disabled = true
+		return u, false, nil
+	}
 	return u, true, nil
 }
 
 // createSession stores a new login session and returns the token for the
 // cookie. Only the hash is stored (D-09), so a leaked database cannot be used
 // to take over a logged-in session.
-func (s *Server) createSession(userID int64) (string, error) {
+//
+// client is "browser" or "cli" (hnctl) and ip where the login came from: the Profile
+// page lists them (D-69), so a person can tell their sessions apart.
+func (s *Server) createSession(userID int64, client, ip string) (string, error) {
 	token, err := newSecret()
 	if err != nil {
 		return "", err
 	}
 	now := time.Now()
 	_, err = s.db.Exec(
-		`INSERT INTO web_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-		hashSecret(token), userID, now.Add(sessionLifetime).Unix(), now.Unix(),
+		`INSERT INTO web_sessions (token_hash, user_id, expires_at, created_at, last_used_at, client, ip)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		hashSecret(token), userID, now.Add(sessionLifetime).Unix(), now.Unix(), now.Unix(), client, ip,
 	)
 	if err != nil {
 		return "", fmt.Errorf("store session: %w", err)
@@ -193,12 +210,16 @@ func (s *Server) sessionUser(r *http.Request) (u user, bearer, ok bool, err erro
 	}
 
 	var admin int
+	var lastUsed int64
+	now := time.Now()
+	// u.disabled = 0: a disabled user's sessions are deleted when they are disabled, and
+	// this makes sure none that slipped through still works (D-69).
 	err = s.db.QueryRow(
-		`SELECT u.id, u.username, u.is_admin
+		`SELECT u.id, u.username, u.is_admin, u.display_name, s.last_used_at
 		 FROM web_sessions s JOIN users u ON u.id = s.user_id
-		 WHERE s.token_hash = ? AND s.expires_at > ?`,
-		hashSecret(token), time.Now().Unix(),
-	).Scan(&u.ID, &u.Username, &admin)
+		 WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0`,
+		hashSecret(token), now.Unix(),
+	).Scan(&u.ID, &u.Username, &admin, &u.DisplayName, &lastUsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return user{}, bearer, false, nil
 	}
@@ -206,6 +227,13 @@ func (s *Server) sessionUser(r *http.Request) (u user, bearer, ok bool, err erro
 		return user{}, bearer, false, fmt.Errorf("look up session: %w", err)
 	}
 	u.IsAdmin = admin == 1
+	// "Last used" for the Profile page. Written at most once a minute: the dashboard asks
+	// every two seconds, and a database write for each would be a lot for a timestamp.
+	if now.Unix()-lastUsed >= 60 {
+		if _, err := s.db.Exec(`UPDATE web_sessions SET last_used_at = ? WHERE token_hash = ?`, now.Unix(), hashSecret(token)); err != nil {
+			slog.Warn("record session use", "err", err)
+		}
+	}
 	return u, bearer, true, nil
 }
 
@@ -320,14 +348,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// The username is neither logged nor audited: people sometimes type
 		// their password into that field. The address is enough to spot an attack.
 		slog.Warn("login failed", "ip", ip)
-		s.audit(0, "", "login_failed", "ip="+ip)
+		if u.disabled {
+			// The right password for a disabled account: say so in the audit log (which
+			// only administrators read), and tell the caller what they are told about any
+			// wrong login.
+			s.audit(u.ID, "", "login_failed", "ip="+ip+" account disabled")
+		} else {
+			s.audit(0, "", "login_failed", "ip="+ip)
+		}
 		// One message for "no such user" and "wrong password", so the answer
 		// does not reveal which usernames exist.
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 
-	token, err := s.createSession(u.ID)
+	client := "browser"
+	if cli {
+		client = "cli"
+	}
+	token, err := s.createSession(u.ID, client, ip)
 	if err != nil {
 		slog.Error("create session", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
