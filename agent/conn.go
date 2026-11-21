@@ -26,10 +26,11 @@ import (
 // permissions (D-58), and 0.9.2 the security fixes of D-62 to D-64 (its own
 // credentials never sent, the tray status in the registry, VNC passwords), and 0.11.0
 // the agent's own `update` command, `sudo headnode update` on Linux and the tray's Update
-// headnode… on Windows (D-67): an older
+// headnode… on Windows (D-67), and 0.11.1 the tray's version line and its Update item
+// that can be pressed only when an update exists (D-68): an older
 // agent ignores the command, stays silent or answers "unknown operation", so the
 // version is how a person can tell whether a host is up to date.
-const Version = "0.11.0"
+const Version = "0.11.1"
 
 const (
 	heartbeatInterval = 20 * time.Second
