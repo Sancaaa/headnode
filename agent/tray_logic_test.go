@@ -9,23 +9,20 @@ import (
 
 func TestTrayView(t *testing.T) {
 	tests := []struct {
-		running, notAtBoot, connected bool
-		status                       string
-		green                        bool
-		toggle                       string
+		running, connected bool
+		status             string
+		blue               bool
 	}{
-		{true, false, true, "Connected to the headnode server", true, "Turn headnode off"},
-		{true, false, false, "Running, not connected to the server", false, "Turn headnode off"},
-		{false, true, false, "Off", false, "Turn headnode on"},
-		{false, false, false, "Stopped", false, "Turn headnode on"},
+		{true, true, "Connected to the headnode server", true},
+		{true, false, "Running, not connected to the server", false},
+		{false, false, "Stopped", false},
 		// A status file that says "connected" is not believed for a service that is not running.
-		{false, true, true, "Off", false, "Turn headnode on"},
+		{false, true, "Stopped", false},
 	}
 	for _, tc := range tests {
-		status, green, toggle := trayView(tc.running, tc.notAtBoot, tc.connected)
-		if status != tc.status || green != tc.green || toggle != tc.toggle {
-			t.Errorf("trayView(%v,%v,%v) = %q,%v,%q; want %q,%v,%q",
-				tc.running, tc.notAtBoot, tc.connected, status, green, toggle, tc.status, tc.green, tc.toggle)
+		status, blue := trayView(tc.running, tc.connected)
+		if status != tc.status || blue != tc.blue {
+			t.Errorf("trayView(%v,%v) = %q,%v; want %q,%v", tc.running, tc.connected, status, blue, tc.status, tc.blue)
 		}
 	}
 }

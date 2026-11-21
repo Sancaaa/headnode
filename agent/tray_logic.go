@@ -13,21 +13,18 @@ import (
 
 // ---------------------------------------------------------------- what the icon says
 
-// trayView turns what is known about the agent service into the line the menu shows,
-// whether the icon is green, and the label of the on/off item. "Off" means the
-// service is stopped AND not set to start at boot (manual, or disabled by an
-// administrator): that is what Turn headnode off does, and nothing of headnode runs
-// then (D-57, D-58).
-func trayView(running, notAtBoot, connected bool) (status string, green bool, toggle string) {
+// trayView turns what is known about the agent service into the line the menu shows
+// and whether the icon is blue (connected) or grey. There is no "off" here (D-60):
+// headnode that was exited has no icon. "Stopped" is only what the icon says if the
+// service stops while the icon is up (somebody stopped it by hand, or it failed).
+func trayView(running, connected bool) (status string, blue bool) {
 	switch {
 	case running && connected:
-		return "Connected to the headnode server", true, "Turn headnode off"
+		return "Connected to the headnode server", true
 	case running:
-		return "Running, not connected to the server", false, "Turn headnode off"
-	case notAtBoot:
-		return "Off", false, "Turn headnode on"
+		return "Running, not connected to the server", false
 	default:
-		return "Stopped", false, "Turn headnode on"
+		return "Stopped", false
 	}
 }
 

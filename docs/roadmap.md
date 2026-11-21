@@ -115,16 +115,16 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 ## M9 — Windows tray icon: switch headnode on and off at the laptop (like Tailscale)
 The idea: a person at the Windows machine must be able to turn headnode off, and be **certain** it is off, without typing commands. The dashboard cannot do this (the agent is the link to it), so the switch lives on the machine itself. Do not start before M8 is finished and tested (including the Raspberry Pi).
 - [ ] The agent service lets the person who installed it start it and send it the icon's control codes without administrator rights (the service's permissions are set at install time), so a program in their own session can turn it off and on; never the right to reconfigure a service (D-58)
-- [ ] `headnode-agent tray`: a tray icon in the user's session, in the same `.exe`: green when the agent is connected, grey when it is stopped or cannot reach the server
-- [ ] Menu: the status line, **Turn headnode off / on** (stops the service and sets it to start by hand; the reverse), **Start VNC / Stop VNC** (the screen, D-51), **Quit** (closes only the icon)
-- [ ] "Off" really is off: the service is stopped **and** set not to start at boot, the menu shows it, and nothing of headnode runs until it is turned on (the icon alone is not headnode)
+- [ ] `headnode-agent tray`: a tray icon in the user's session, in the same `.exe`: blue (the logo's colour) when the agent is connected, grey when it is running but cannot reach the server (D-60)
+- [ ] Menu: the status line, **Start VNC / Stop VNC** (the screen, D-51), **Exit** (D-59, D-60). No "Turn off / on" item and no "off" state in the icon: headnode is on with its icon, or off with none
+- [ ] "Off" really is off: after Exit the service is stopped **and** set not to start at boot, the icon is gone, and nothing of headnode runs until the headnode app is opened
 - [ ] `install.ps1` starts the tray at login (a per-user entry in the registry's Run key) and starts it now; `-NoTray` skips it; uninstalling the service removes the entry
 - [ ] Decisions entry for how the icon is drawn: the library `fyne.io/systray` (preferred: far less code, pure Go on Windows; needs the owner's approval before it is added to `go.mod`, per CLAUDE.md) or `golang.org/x/sys/windows` directly (no new dependency, about 200 lines of Windows message-loop code). Also how the tray talks to the service: service permissions (preferred) or a local named pipe
 - [ ] Guide in `docs/windows.md`: what the icon does, how to check by hand that headnode is off (`Get-Service headnode-agent`, `Get-Process headnode-agent`, nothing on port 5900)
 
 - [ ] **Exit** in the menu (in place of Quit) turns headnode off completely and closes the icon; **headnode** is a searchable Start menu app that shows the icon again and turns headnode on (D-59)
 
-**Done when:** after installing with the one command, a tray icon appears; "Turn headnode off" turns the icon grey, the host goes *offline* in the dashboard within a minute, `Get-Service headnode-agent` says `Stopped` and `Manual` (D-58), no `headnode-agent` process exists, and a reboot does not bring it back; "Turn headnode on" reverses all of it; the icon returns at the next login on its own. Linux has no tray (a Raspberry Pi or a server is managed with `systemctl`).
+**Done when:** after installing with the one command, a blue tray icon appears; **Exit** closes the icon, the host goes *offline* in the dashboard within a minute, `Get-Service headnode-agent` says `Stopped` and `Manual` (D-58), no `headnode-agent` process exists, and a reboot does not bring it back or show an icon; typing **headnode** in the Start menu and opening it shows the icon and turns all of it back on. Linux has no tray (a Raspberry Pi or a server is managed with `systemctl`).
 
 ---
 

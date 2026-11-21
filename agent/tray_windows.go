@@ -17,18 +17,17 @@ import (
 )
 
 // The tray icon of a Windows host (M9, D-57): `headnode-agent tray`. A person at the
-// machine can see whether headnode is connected, and turn it off and on, without a
-// command and without administrator rights. It runs in the person's own session. It
-// may start the agent's service and send it control codes, which `service allow`
-// permits that one person; it may not reconfigure any service (D-58): the agent, as
-// LocalSystem, does that when it is asked.
+// machine can see whether headnode is connected, and turn it off, without a command and
+// without administrator rights. It runs in the person's own session. It may start the
+// agent's service and send it control codes, which `service allow` permits that one
+// person; it may not reconfigure any service (D-58): the agent, as LocalSystem, does
+// that when it is asked.
 //
-// "Off" really is off: the service is stopped and set to start only by hand, so
-// nothing of headnode runs until it is turned on. Two ways to get there (D-59):
-//   - Turn headnode off keeps the icon, so one click turns it on again;
-//   - Exit does the same and closes the icon too. Opening the headnode app (the Start
-//     menu entry, `tray -start`) brings the icon back and turns headnode on.
-// The icon alone is not headnode: it is only a way to reach it.
+// There is no "off" state in the icon (D-60): headnode is either on, with its icon, or
+// off, with no icon at all. Exit turns headnode off completely (the service is stopped
+// and set to start only by hand, so nothing of headnode runs) and closes the icon.
+// Opening the headnode app (the Start menu entry, `tray -start`) brings both back. At
+// login the icon appears only if headnode is on.
 
 const trayRunValue = "headnode-tray" // the name of the login entry, in install.ps1 too
 const trayShortcut = "headnode.lnk"  // the Start menu entry, in install.ps1 too
@@ -50,67 +49,72 @@ func RunTray(startAgent bool) error {
 	alreadyRunning := err != nil
 
 	// An error here is not worth stopping for: the icon opens and says what state
-	// headnode is in, and the person can press Turn headnode on.
+	// headnode is in.
 	if startAgent {
 		switchAgent(true)
 	}
 	if alreadyRunning {
 		return nil // its icon is there already, and now headnode is on
 	}
+	// Started at login, not by the person opening the app: headnode that was exited is
+	// off, and off has no icon (D-60). A headnode set to start at boot gets its icon even
+	// if the service has not finished starting yet.
+	if !startAgent {
+		if st := readTrayState(); st.err == nil && !st.running && st.notAtBoot {
+			return nil
+		}
+	}
 
 	// This program is a console program, and started at login it would keep an empty
 	// console window open. The icon has nothing to print.
 	windows.NewLazySystemDLL("kernel32.dll").NewProc("FreeConsole").Call()
 
-	green := trayIcon(0x2e, 0x9e, 0x5b)
+	blue := BrandIcon() // the logo's own color: connected
 	grey := trayIcon(0x8a, 0x8a, 0x8a)
-	systray.Run(func() { trayReady(green, grey) }, func() {})
+	systray.Run(func() { trayReady(blue, grey) }, func() {})
 	return nil
 }
 
-func trayReady(green, grey []byte) {
+func trayReady(blue, grey []byte) {
 	systray.SetIcon(grey)
 	systray.SetTooltip("headnode")
 
 	status := systray.AddMenuItem("headnode", "")
 	status.Disable() // a line of text, not a command
 	systray.AddSeparator()
-	toggle := systray.AddMenuItem("Turn headnode off", "Stop headnode on this computer, and keep it from starting at boot")
 	screen := systray.AddMenuItem("Start VNC", "Share this computer's screen with headnode")
 	screen.Hide() // until we know that TightVNC is installed
 	systray.AddSeparator()
 	exit := systray.AddMenuItem("Exit", "Turn headnode off and close this icon. Open headnode from the Start menu to bring it back.")
 
-	go trayLoop(status, toggle, screen, exit, green, grey)
+	go trayLoop(status, screen, exit, blue, grey)
 }
 
 // trayLoop keeps the icon up to date and does what the menu asks, one thing at a time.
-func trayLoop(status, toggle, screen, exit *systray.MenuItem, green, grey []byte) {
+func trayLoop(status, screen, exit *systray.MenuItem, blue, grey []byte) {
 	var (
 		problem      string // the last action's error, shown for a while
 		problemUntil time.Time
-		shownGreen   *bool // which icon is up, so it is only replaced when it changes
+		shownBlue    *bool // which icon is up, so it is only replaced when it changes
 	)
 	refresh := func() {
 		st := readTrayState()
-		line, isGreen, toggleLabel := trayView(st.running, st.notAtBoot, st.connected)
+		line, isBlue := trayView(st.running, st.connected)
 		if st.err != nil {
-			line, isGreen = st.err.Error(), false
+			line, isBlue = st.err.Error(), false
 		}
 		if problem != "" && time.Now().Before(problemUntil) {
 			line = problem
 		}
 		status.SetTitle(line)
-		toggle.SetTitle(toggleLabel)
-		toggle.Enable()
 		systray.SetTooltip("headnode: " + line)
-		if shownGreen == nil || *shownGreen != isGreen {
-			if isGreen {
-				systray.SetIcon(green)
+		if shownBlue == nil || *shownBlue != isBlue {
+			if isBlue {
+				systray.SetIcon(blue)
 			} else {
 				systray.SetIcon(grey)
 			}
-			shownGreen = &isGreen
+			shownBlue = &isBlue
 		}
 		// The agent switches the screen for the icon, so with headnode off there is
 		// nobody to ask (and nothing to reach the screen through anyway).
@@ -136,14 +140,6 @@ func trayLoop(status, toggle, screen, exit *systray.MenuItem, green, grey []byte
 	for {
 		select {
 		case <-ticker.C:
-			refresh()
-		case <-toggle.ClickedCh:
-			st := readTrayState()
-			toggle.SetTitle("Working…")
-			toggle.Disable()
-			if err := switchAgent(!st.running); err != nil {
-				fail("Could not switch headnode", err)
-			}
 			refresh()
 		case <-screen.ClickedCh:
 			st := readTrayState()

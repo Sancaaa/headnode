@@ -34,15 +34,15 @@ If a VNC server already listens on port 5900, the script keeps it as it is and o
 
 **Switching the screen on and off (D-51).** A VNC server uses CPU and memory all the time, even when nobody is watching, and shares the screen while it runs, so the installer leaves it off. The Hosts page shows **Start VNC** where the VNC button would be; one click starts it and the VNC button comes back within seconds. **Stop VNC** on its Screen page stops it again and sets it to start only by hand, so it stays off after a reboot; on that page the same button then reads **Start VNC**, and the screen connects by itself once the server is up. (Starting it sets it to start at boot, until you stop it again.) You need the same operator role as for the screen itself, and every start and stop is in the audit log. This works for the TightVNC the install command set up (the service named `tvnserver`).
 
-## The tray icon: turn headnode off and on at the computer
+## The tray icon: see that headnode is on, and exit it at the computer
 
-The install command also puts a **headnode icon** in the tray (the area by the clock; click the `^` if it is hidden), and starts it again at every login. It is for the person at the computer, and needs no administrator rights (D-57):
+The install command also puts a **headnode icon** in the tray (the area by the clock; click the `^` if it is hidden). It is for the person at the computer, and needs no administrator rights (D-57). headnode is either **on**, with its icon, or **off**, with no icon at all: the icon has no "off" state (D-60).
 
-- **Green:** headnode is connected to the server. **Grey:** it is off, stopped, or cannot reach the server. Hover the icon for the words.
-- **Turn headnode off** stops headnode on this computer **and** keeps it from starting at boot, so nothing of headnode runs and the host goes *offline* in the dashboard within a minute. **Turn headnode on** reverses all of it.
-- **Start VNC / Stop VNC** (when TightVNC is installed, and only while headnode is on) does what the dashboard's button does, from here: the icon asks the agent, and the agent switches TightVNC.
-- **Exit** turns headnode off completely (the same as Turn headnode off, and the screen is switched off too) **and** closes the icon. Nothing of headnode runs on the computer then.
-- **To bring it back after Exit,** type **headnode** in the Start menu search and open it, like any app. That shows the icon again **and turns headnode on**. (If the icon is already there, opening the app just makes sure headnode is on.) The icon also comes back by itself at your next login, in the *Off* state, and headnode stays off until you turn it on.
+- **Blue** (the logo's colour): headnode is connected to the server. **Grey:** it is running but cannot reach the server. Hover the icon for the words.
+- **Start VNC / Stop VNC** (when TightVNC is installed) does what the dashboard's button does, from here: the icon asks the agent, and the agent switches TightVNC.
+- **Exit** turns headnode off completely (the screen is switched off too) **and** closes the icon. headnode is stopped **and** set not to start at boot, so nothing of headnode runs on the computer, and the host goes *offline* in the dashboard within a minute.
+- **To turn headnode back on,** type **headnode** in the Start menu search and open it, like any app. That shows the icon **and** turns headnode on. (If the icon is already there, opening the app just makes sure headnode is on.)
+- **At login** the icon appears only if headnode is on. After an Exit nothing starts by itself: headnode stays off until you open the app.
 
 Only the account that ran the install command may use the icon's switch (the service's permissions name that one account); other people logged in on the same computer cannot turn headnode off. That account may start the `headnode-agent` service and send it the icon's requests, nothing more: it may not reconfigure any service, because a person who can change a service's program can run anything as the system (D-58). `-NoTray` at the end of the install command skips the icon and the permissions. Running the install command again also turns headnode on again.
 
