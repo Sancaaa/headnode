@@ -15,10 +15,13 @@
 #   -VncPassword SECRET ask for this password when connecting (1 to 8 letters or
 #                       digits; VNC ignores anything past 8). Without it, the
 #                       dashboard login and role are the only gate.
+#   -NoTray             no tray icon. Without this option the person who runs the script
+#                       gets an icon (D-57) to turn headnode off and on without
+#                       administrator rights: it starts now and at every login.
 #
 # The whole script is one script block that PowerShell reads completely before it
 # runs anything: a download that is cut short is a syntax error, and does nothing.
-param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '', [switch]$ReplaceVnc)
+param([string]$Token = '', [switch]$NoVnc, [string]$VncPassword = '', [switch]$ReplaceVnc, [switch]$NoTray)
 
 $ErrorActionPreference = 'Stop'
 $Server = '__SERVER__'
@@ -245,6 +248,33 @@ if ($NoVnc) {
     } catch {
         Write-Warning "The screen was not set up: $($_.Exception.Message)"
         Write-Warning 'The agent works without it. See docs/windows.md to set up VNC by hand, or run this script again.'
+    }
+}
+
+# --- the tray icon (M9, D-57): lets the person at this computer turn headnode off and
+# on, like Tailscale. Two things: the person (whoever runs this script) is given the
+# right to start and stop the services, and the icon is started now and at every
+# login. A failure here costs only the icon: the agent is already running.
+if ($NoTray) {
+    Write-Host 'Skipping the tray icon (-NoTray).'
+} else {
+    try {
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        & $Bin service allow -sid $sid
+        if ($LASTEXITCODE -ne 0) { Fail 'setting who may turn headnode on and off failed' }
+
+        # A per-user entry that Windows runs at login. It is removed by "service uninstall".
+        $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        if (-not (Test-Path $run)) { New-Item -Path $run | Out-Null }
+        Set-ItemProperty -Path $run -Name 'headnode-tray' -Value "`"$Bin`" tray"
+
+        # Hidden window: it is a console program, and has nothing to print. The copy started
+        # here runs with the rights of this window; the one started at login does not.
+        Start-Process -FilePath $Bin -ArgumentList 'tray' -WindowStyle Hidden
+        Write-Host 'The headnode icon is in the tray (click ^ by the clock if it is hidden).'
+    } catch {
+        Write-Warning "The tray icon was not set up: $($_.Exception.Message)"
+        Write-Warning 'The agent works without it. Run this command again, or use -NoTray to leave it out.'
     }
 }
 

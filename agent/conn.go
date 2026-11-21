@@ -69,6 +69,7 @@ func Run(ctx context.Context, cfg Config) error {
 			err = heartbeatLoop(ctx, cfg, conn)
 			upFor = time.Since(connectedAt)
 		}
+		writeStatus(false) // for the Windows tray icon (D-57): no longer connected
 		if ctx.Err() != nil {
 			return ctx.Err() // we were asked to stop (Ctrl+C)
 		}
@@ -198,6 +199,7 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 		if err := send(connCtx, conn, protocol.TypeHeartbeat, hb); err != nil {
 			return err
 		}
+		writeStatus(true) // for the Windows tray icon (D-57): a heartbeat just went out
 
 		select {
 		case <-connCtx.Done():

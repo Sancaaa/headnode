@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M8** (M9, the Windows tray icon, comes after it)
+**Active milestone: M9** (the Windows tray icon)
 
 ---
 
@@ -108,7 +108,7 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 - [x] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)
 - [x] **Start VNC** / **Stop VNC** from the dashboard for Windows hosts, to save the machine's resources (D-51)
 - [x] `install.ps1` installs TightVNC 2.8.90 itself, loopback only, switched off, so a client runs one command and gets the screen (D-50, D-53); `-NoVnc`, `-VncPassword` and `-ReplaceVnc` options
-- [ ] Linux desktops (tested on a Raspberry Pi 5): `install.sh` prepares wayvnc or x11vnc, and Start VNC / Stop VNC run it on `127.0.0.1:5900` (D-54)
+- [x] Linux desktops (tested on a Raspberry Pi 5): `install.sh` prepares wayvnc or x11vnc, and Start VNC / Stop VNC run it on `127.0.0.1:5900` (D-54)
 
 **Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way. A Windows host added with the one install command shows **Start VNC** (the screen is off by default, D-50), and after one click its VNC button, with nothing else to install.
 

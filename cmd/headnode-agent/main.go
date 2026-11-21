@@ -22,6 +22,10 @@ const usage = `usage:
                                                   -user: the Linux account the agent runs as (terminals and
                                                   files are that user's); without it, root
   headnode-agent service uninstall                remove that service
+  headnode-agent service allow -sid SID           (Windows, Administrator) let that user switch the service and
+                                                  TightVNC's on and off without administrator rights
+  headnode-agent tray                             (Windows) a tray icon: connected or not, Turn headnode off / on,
+                                                  Start / Stop VNC
 
 The service's default credentials file is /etc/headnode/agent.json on Linux and
 %ProgramData%\headnode\agent.json on Windows.`
@@ -38,6 +42,10 @@ func main() {
 		runCommand(os.Args[2:])
 	case "service":
 		serviceCommand(os.Args[2:])
+	case "tray":
+		if err := agent.RunTray(); err != nil {
+			log.Fatal(err)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -72,9 +80,19 @@ func serviceCommand(args []string) {
 	fs := flag.NewFlagSet("service "+args[0], flag.ExitOnError)
 	config := fs.String("config", agent.DefaultConfigPath(), "credentials file written by enroll")
 	runUser := fs.String("user", "", "(install, Linux) the account the agent runs as: terminals and files are that user's. Default: root")
+	sid := fs.String("sid", "", "(allow, Windows) the security identifier of the user who may switch the service")
 	fs.Parse(args[1:])
 
 	switch args[0] {
+	case "allow":
+		if *sid == "" {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
+		}
+		if err := agent.AllowService(*sid); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("that user may now turn headnode (and TightVNC) on and off without administrator rights.")
 	case "install":
 		if err := agent.InstallService(*config, *runUser); err != nil {
 			log.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -14,16 +15,11 @@ import (
 // install.ps1 installs it (D-50).
 const vncServiceName = "tvnserver"
 
-// canControlVNC says whether a TightVNC service exists that this agent may change.
-// The agent runs as LocalSystem, so it may; run from a console without
-// administrator rights it may not, and the answer is no.
+// canControlVNC says whether a TightVNC service exists that this program may look
+// at. The agent runs as LocalSystem, and the tray icon as a user who was given
+// rights to the service (service_access_windows.go).
 func canControlVNC() bool {
-	m, err := mgr.Connect()
-	if err != nil {
-		return false
-	}
-	defer m.Disconnect()
-	s, err := m.OpenService(vncServiceName)
+	s, err := openService(vncServiceName, windows.SERVICE_QUERY_STATUS)
 	if err != nil {
 		return false
 	}
@@ -31,20 +27,19 @@ func canControlVNC() bool {
 	return true
 }
 
-// setVNCService turns the VNC server on or off for good, not just for now.
+// setVNCService turns the VNC server on or off for good, not just for now. It is
+// used by the agent (the dashboard's Start VNC) and by the tray icon.
 //
 // Off means stopped AND set to start only by hand: a stopped service that comes
 // back at the next boot would use the resources again, which is what turning it
 // off is for. On means set to start at boot and started now.
 func setVNCService(enabled bool) error {
-	m, err := mgr.Connect()
+	s, err := openService(vncServiceName, serviceSwitchRights)
 	if err != nil {
-		return fmt.Errorf("connect to the service manager: %w", err)
-	}
-	defer m.Disconnect()
-	s, err := m.OpenService(vncServiceName)
-	if err != nil {
-		return errors.New("TightVNC is not installed as a service on this host")
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return errors.New("TightVNC is not installed as a service on this host")
+		}
+		return fmt.Errorf("open the VNC service: %w", err)
 	}
 	defer s.Close()
 

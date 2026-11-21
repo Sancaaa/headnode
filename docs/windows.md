@@ -34,6 +34,25 @@ If a VNC server already listens on port 5900, the script keeps it as it is and o
 
 **Switching the screen on and off (D-51).** A VNC server uses CPU and memory all the time, even when nobody is watching, and shares the screen while it runs, so the installer leaves it off. The Hosts page shows **Start VNC** where the VNC button would be; one click starts it and the VNC button comes back within seconds. **Stop VNC** on its Screen page stops it again and sets it to start only by hand, so it stays off after a reboot; on that page the same button then reads **Start VNC**, and the screen connects by itself once the server is up. (Starting it sets it to start at boot, until you stop it again.) You need the same operator role as for the screen itself, and every start and stop is in the audit log. This works for the TightVNC the install command set up (the service named `tvnserver`).
 
+## The tray icon: turn headnode off and on at the computer
+
+The install command also puts a **headnode icon** in the tray (the area by the clock; click the `^` if it is hidden), and starts it again at every login. It is for the person at the computer, and needs no administrator rights (D-57):
+
+- **Green:** headnode is connected to the server. **Grey:** it is off, stopped, or cannot reach the server. Hover the icon for the words.
+- **Turn headnode off** stops headnode on this computer **and** keeps it from starting at boot, so nothing of headnode runs and the host goes *offline* in the dashboard within a minute. **Turn headnode on** reverses all of it.
+- **Start VNC / Stop VNC** (when TightVNC is installed) does what the dashboard's button does, from here.
+- **Quit** closes only the icon. headnode keeps running, or stays off, as it was. The icon is not headnode.
+
+Only the account that ran the install command may use the icon's switch (the service's permissions name that one account); other people logged in on the same computer cannot turn headnode off. `-NoTray` at the end of the install command skips the icon and the permissions. Running the install command again also turns headnode on again.
+
+To check by hand that headnode is really off (PowerShell):
+
+```powershell
+Get-Service headnode-agent | Select-Object Status, StartType   # Stopped, Disabled
+Get-Process headnode-agent -ErrorAction SilentlyContinue        # prints nothing (the icon itself is also headnode-agent.exe: it only shows the state)
+Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue   # prints nothing if VNC is off too
+```
+
 ## 2. Install a VNC server by hand, for loopback only
 
 Skip this if the install command set up TightVNC (the VNC button is there). Otherwise: headnode needs a VNC server listening on `127.0.0.1:5900` **and nowhere else**. A VNC server open to the network is a hole headnode cannot close for you, and VNC passwords are weak.
