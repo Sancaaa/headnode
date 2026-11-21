@@ -28,6 +28,10 @@ const usage = `usage:
                                                   Start / Stop VNC, Exit. -start also turns headnode on if it
                                                   is off: that is what the Start menu entry runs
   headnode-agent icon -out FILE.ico               write the logo as an icon file (for the Start menu entry)
+  headnode-agent update [-force]                  replace this program with the newest one on the server and restart
+                                                  the service (Linux: sudo headnode update; Windows: the tray icon's
+                                                  Update headnode…, or an administrator prompt)
+  headnode-agent version                          print the agent's version
 
 The service's default credentials file is /etc/headnode/agent.json on Linux and
 %ProgramData%\headnode\agent.json on Windows.`
@@ -48,6 +52,12 @@ func main() {
 		trayCommand(os.Args[2:])
 	case "icon":
 		iconCommand(os.Args[2:])
+	case "update":
+		updateCommand(os.Args[2:])
+	case "version":
+		// Printed alone, because `update` runs the program it just downloaded with this
+		// and reads the answer (D-67).
+		fmt.Println(agent.Version)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -120,6 +130,20 @@ func trayCommand(args []string) {
 	fs.Parse(args)
 	if err := agent.RunTray(*start); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// updateCommand replaces the installed program with the newest one on the server (M10,
+// D-67). On Linux it is `sudo headnode update` (install.sh makes `headnode` a link to this
+// program); on Windows the tray icon starts it elevated and with no window.
+func updateCommand(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	config := fs.String("config", agent.DefaultConfigPath(), "credentials file written by enroll (it names the server)")
+	force := fs.Bool("force", false, "install it even if the server has the same version")
+	fs.Parse(args)
+	if err := agent.Update(*config, *force, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "update:", err)
+		os.Exit(1)
 	}
 }
 

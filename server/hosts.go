@@ -327,7 +327,7 @@ func (s *Server) loadHosts(u user, where string, args ...any) ([]host, error) {
 			}
 		}
 		h.Online, h.Heartbeat = s.agents.status(h.ID)
-		if latest != "" && versionOlder(h.Version, latest) {
+		if latest != "" && protocol.VersionOlder(h.Version, latest) {
 			h.UpdateAvailable = true
 			h.LatestVersion = latest
 		}

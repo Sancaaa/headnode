@@ -279,7 +279,11 @@ The agent program, as `application/octet-stream`, for a platform the server has:
 | 200 / 206 | The program (or the part asked for). |
 | 404 | The name is not one of the offered platforms (the list is fixed in the server, so a name can never reach another file), or the server has no agents folder, or that build is not in it (`scripts/build-agents` makes them). |
 
-The server reads them from the folder given with `headnode -agents DIR` (default `dist/`). `scripts/build-agents.ps1` (Windows) and `scripts/build-agents.sh` build every platform into it.
+The server reads them from the folder given with `headnode -agents DIR` (default `dist/`). `scripts/build-agents.ps1` (Windows) and `scripts/build-agents.sh` build every platform into it, and write the version of what they built to `VERSION` in the same folder.
+
+**`GET /download/VERSION`** (M10, D-67): that file, as `text/plain`, with no login (like the programs, it holds nothing secret): a version such as `0.11.0`. It is the one other name this endpoint serves. `404` if the server has no agents folder or no `VERSION` in it. The agent's `update` command reads it to see whether a newer program is on offer, and the Hosts page's "update available" comes from the same file (`update_available` in the host object, §1).
+
+**The agent's own commands for this (D-67).** `headnode-agent version` prints the agent's version and nothing else. `headnode-agent update [-force]` replaces the installed program with the one on the server named in `agent.json` (see D-67 for the steps): on Linux it needs root, and `install.sh` makes `/usr/local/bin/headnode` a link to the agent, so `sudo headnode update` works; on Windows it needs an administrator and is started by the tray icon's **Update headnode…**.
 
 #### `POST /agent/enroll`
 

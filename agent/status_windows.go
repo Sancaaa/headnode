@@ -44,27 +44,27 @@ func readStatus() string {
 	return text
 }
 
-// writeServer records the address of the server this agent belongs to, in the same key
-// (M10, D-66): the tray icon's Update headnode… needs it to build the update command,
-// and the credentials file that holds it is private. Written by the agent, as the
-// system, so (D-63) only an administrator could have put anything else there.
-func writeServer(server string) {
-	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, statusKey, registry.SET_VALUE)
-	if err != nil {
+// writeUpdateResult records how the last `headnode-agent update` went, in the same key
+// (D-67): the update runs elevated and with no window, so the tray icon, which started
+// it, could not otherwise tell the person that it failed. Only an administrator can
+// write here (D-63), which is who runs the update.
+func writeUpdateResult(err error) {
+	key, _, kerr := registry.CreateKey(registry.LOCAL_MACHINE, statusKey, registry.SET_VALUE)
+	if kerr != nil {
 		return
 	}
 	defer key.Close()
-	key.SetStringValue("Server", server)
+	key.SetStringValue("Update", updateResultLine(err, time.Now()))
 }
 
-// readServer returns what writeServer last wrote, or "" if nothing was.
-func readServer() string {
+// readUpdateResult returns what writeUpdateResult last wrote, or "" if nothing was.
+func readUpdateResult() string {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, statusKey, registry.QUERY_VALUE)
 	if err != nil {
 		return ""
 	}
 	defer key.Close()
-	text, _, err := key.GetStringValue("Server")
+	text, _, err := key.GetStringValue("Update")
 	if err != nil {
 		return ""
 	}

@@ -131,14 +131,12 @@ The idea: the installers already update a host (run the install command again wi
 - [x] The agent build script writes the agent version to `dist/VERSION`, next to the programs
 - [x] The server reads `dist/VERSION` when it needs it (not once at start: agents can be rebuilt without a restart, D-40) and compares it with the version each agent sends in `hello`, number by number (`0.10.0` is newer than `0.9.2`)
 - [x] Hosts page: an **Update available** badge on hosts that are behind, and "· N outdated" in the count pill
-- [x] **How to update** dialog on such a host: the exact update command for its OS, with a Copy button (Linux: paste it in the Shell tab; Windows: an administrator PowerShell, through the Screen tab or at the machine)
-- [x] Windows tray: an **Update headnode…** menu item that runs the update in an administrator PowerShell (a UAC prompt), the same `install.ps1` update as the dialog's command. From afar: Screen tab → tray icon → Update → UAC, through VNC
-  - [x] The tray needs the server's address: the agent writes it next to `Status` in `HKLM\SOFTWARE\headnode` (D-63: only administrators and the system can write there, every user can read)
-  - [x] The address is checked strictly (`https://` + host + optional port) before it goes into the command, and the elevated PowerShell downloads the script itself: nothing is run from a folder a normal user can write to
-  - [x] If the UAC prompt is accepted, the old icon closes (the installer starts the new one); if it is cancelled, nothing changes
-- [x] No new protocol message, and the agent changes only by the one registry value above; no `dist/VERSION` means no badges, not an error
+- [x] **How to update** dialog on such a host: the command for its OS and its agent, with a Copy button (D-67): `sudo headnode update` on Linux (paste it in the Shell tab), the tray's **Update headnode…** on Windows; the install command once, for an agent older than 0.11.0
+- [x] The agent updates itself (D-67): `headnode-agent update`, on Linux `sudo headnode update` (`install.sh` links `headnode` to the agent). It reads `/download/VERSION`, downloads the program for its system next to the installed one, runs it with `version` to check it, and swaps it in and restarts the service. "Up to date" changes nothing
+- [x] Windows tray: an **Update headnode…** menu item that starts that command elevated and with **no window**, behind the system's own administrator prompt. If the prompt is cancelled, nothing changes; if the update fails, the icon says why; if it works, the icon closes and comes back. From afar: Screen tab → tray icon → Update → prompt, through VNC
+- [x] No new protocol message; no `dist/VERSION` means no badges and "cannot ask the server", not a crash
 
-**Done when:** after building a newer agent into `dist/`, the hosts with the older version show *Update available* without restarting the server; running the copied command on one of them makes its badge disappear after it reconnects. On a Windows host, **Update headnode…** in the tray, after the UAC prompt, does the same and leaves one blue icon.
+**Done when:** after building a newer agent into `dist/`, the hosts with the older version show *Update available* without restarting the server; running the command from the dialog (`sudo headnode update` on a Linux host) makes its badge disappear after it reconnects. On a Windows host, **Update headnode…** in the tray, after the administrator prompt and with no window, does the same and leaves one blue icon. Running `sudo headnode update` again says the host is up to date and changes nothing.
 
 ---
 

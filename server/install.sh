@@ -191,6 +191,16 @@ main() {
     mv -f "$tmp" "$BIN"
     trap - EXIT
 
+    # --- `headnode`: a short name for the same program, so that `sudo headnode update`
+    # updates this agent (D-67). Only if the name is free: a different program called
+    # headnode (the server's, on a machine that is both) is left alone.
+    LINK=/usr/local/bin/headnode
+    if [ ! -e "$LINK" ] && [ ! -L "$LINK" ] || [ "$(readlink "$LINK" 2>/dev/null)" = "headnode-agent" ]; then
+        ln -sf headnode-agent "$LINK"
+    else
+        say "$LINK already exists and is not a link to the agent: not changed. Update with: sudo headnode-agent update"
+    fi
+
     # --- enroll, unless this host already is
     if [ -f "$CONFIG" ]; then
         say "This host is already enrolled ($CONFIG): keeping its identity."

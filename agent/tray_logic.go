@@ -60,26 +60,38 @@ func parseStatus(text string, now time.Time) bool {
 	return now.Sub(time.Unix(at, 0)) <= statusStaleAfter
 }
 
-// ------------------------------------------------------------------- the update command
+// --------------------------------------------------------------- how an update went
 
-// updateServerRe is the only shape of server address that goes into the update command:
-// https, a host name or an address, an optional port, nothing else (M10, D-66). The
-// address comes from the registry, where only an administrator or the system writes it,
-// and is checked anyway: it ends up inside a PowerShell command that an administrator
-// approves, so a quote or a semicolon in it would run somebody else's code.
-var updateServerRe = regexp.MustCompile(`^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
-
-// updateArguments are the arguments of the elevated PowerShell that updates the agent:
-// it downloads install.ps1 from the server itself (nothing is run from a folder a
-// normal user can write to) and runs it without a token, which updates an enrolled
-// host. The window stays open until Enter, so its output can be read. ok is false when
-// the address is not one that may go into the command.
-func updateArguments(server string) (arguments string, ok bool) {
-	if !updateServerRe.MatchString(server) {
-		return "", false
+// updateResultLine is what the update writes for the tray icon (D-67), since it runs
+// elevated and with no window and has nobody to say it to: "ok 1763700000", or
+// "failed 1763700000 the reason". The reason is one line, and short.
+func updateResultLine(err error, now time.Time) string {
+	at := strconv.FormatInt(now.Unix(), 10)
+	if err == nil {
+		return "ok " + at
 	}
-	return `-NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm ` + server +
-		`/install.ps1))); Read-Host 'Press Enter to close'"`, true
+	reason := strings.Join(strings.Fields(err.Error()), " ") // one line, single spaces
+	if len(reason) > 200 {
+		reason = reason[:200]
+	}
+	return "failed " + at + " " + reason
+}
+
+// parseUpdateResult reads what updateResultLine wrote. ok is false for a line that is
+// not one (nothing written yet, or damaged).
+func parseUpdateResult(text string) (failed bool, at time.Time, reason string, ok bool) {
+	fields := strings.SplitN(strings.TrimSpace(text), " ", 3)
+	if len(fields) < 2 || (fields[0] != "ok" && fields[0] != "failed") {
+		return false, time.Time{}, "", false
+	}
+	seconds, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return false, time.Time{}, "", false
+	}
+	if len(fields) == 3 {
+		reason = fields[2]
+	}
+	return fields[0] == "failed", time.Unix(seconds, 0), reason, true
 }
 
 // -------------------------------------------------------------- who may switch the service

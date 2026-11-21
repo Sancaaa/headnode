@@ -86,7 +86,7 @@ func trayReady(blue, grey []byte) {
 	screen.Hide() // until we know that TightVNC is installed
 	// On every version: the icon does not know whether an update exists, the dashboard does
 	// (M10, D-66). Windows hosts have no Shell tab, so this is how an update is started there.
-	update := systray.AddMenuItem("Update headnode…", "Install the newest headnode agent on this computer (asks for an administrator)")
+	update := systray.AddMenuItem("Update headnode…", "Install the newest headnode agent from your server (asks for an administrator, shows no window)")
 	systray.AddSeparator()
 	exit := systray.AddMenuItem("Exit", "Turn headnode off and close this icon. Open headnode from the Start menu to bring it back.")
 
@@ -99,12 +99,21 @@ func trayLoop(status, screen, update, exit *systray.MenuItem, blue, grey []byte)
 		problem      string // the last action's error, shown for a while
 		problemUntil time.Time
 		shownBlue    *bool // which icon is up, so it is only replaced when it changes
+		updateAsked  time.Time // when Update headnode… was chosen: only a later result is about it
 	)
 	refresh := func() {
 		st := readTrayState()
 		line, isBlue := trayView(st.running, st.connected)
 		if st.err != nil {
 			line, isBlue = st.err.Error(), false
+		}
+		// An update that failed says so here: it ran elevated and with no window, so this is the
+		// only place the person can see why (D-67). One that worked closes this icon and opens a new one.
+		if !updateAsked.IsZero() {
+			if failed, at, reason, ok := parseUpdateResult(readUpdateResult()); ok && failed && !at.Before(updateAsked) {
+				problem, problemUntil = "Update failed: "+reason, time.Now().Add(time.Minute)
+				updateAsked = time.Time{}
+			}
 		}
 		if problem != "" && time.Now().Before(problemUntil) {
 			line = problem
@@ -153,9 +162,10 @@ func trayLoop(status, screen, update, exit *systray.MenuItem, blue, grey []byte)
 			screen.Enable()
 			refresh()
 		case <-update.ClickedCh:
-			// An administrator's PowerShell, behind the system's own prompt. If the person
-			// cancels it, nothing happens. If they accept, the installer replaces the
-			// program and starts a new icon, and this one is closed by it (D-66).
+			// The update runs as an administrator, behind the system's own prompt, with no
+			// window. If the person cancels, nothing happens. If they accept, it replaces the
+			// program, closes this icon and starts a new one (D-67).
+			updateAsked = time.Now().Add(-2 * time.Second) // a little before, so a result in the same second counts
 			if err := runUpdate(); err != nil {
 				fail("Could not start the update", err)
 				refresh()
@@ -272,28 +282,34 @@ func askAgentVNC(on bool) error {
 	return nil
 }
 
-// runUpdate opens a PowerShell as an administrator (the system shows its own prompt, and
-// nothing runs without the person's consent) that downloads install.ps1 from this host's
-// server and runs it, which updates the agent (M10, D-66). The icon gains no right by it:
-// whoever accepts the prompt is an administrator.
+// runUpdate starts `headnode-agent update` as an administrator, with no window (M10,
+// D-67). The system shows its own prompt, naming this program, and nothing runs without
+// the person's consent; if they say no, nothing happens. The icon gains no right by it:
+// whoever accepts the prompt is an administrator. Nothing is downloaded and run from a
+// script: the program that is already installed fetches the new program, runs it once to
+// check it, and swaps it in. How it went is written to the registry (writeUpdateResult),
+// where the icon reads it.
 func runUpdate() error {
-	arguments, ok := updateArguments(readServer())
-	if !ok {
-		return errors.New("the server's address is not known yet: wait a few seconds after headnode connects, and try again")
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if exe, err = filepath.EvalSymlinks(exe); err != nil {
+		return err
 	}
 	verb, err := windows.UTF16PtrFromString("runas")
 	if err != nil {
 		return err
 	}
-	file, err := windows.UTF16PtrFromString("powershell.exe")
+	file, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
 		return err
 	}
-	args, err := windows.UTF16PtrFromString(arguments)
+	args, err := windows.UTF16PtrFromString("update")
 	if err != nil {
 		return err
 	}
-	err = windows.ShellExecute(0, verb, file, args, nil, windows.SW_SHOWNORMAL)
+	err = windows.ShellExecute(0, verb, file, args, nil, windows.SW_HIDE)
 	if errors.Is(err, windows.ERROR_CANCELLED) {
 		return nil // the person said no at the prompt
 	}

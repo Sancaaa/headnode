@@ -359,29 +359,61 @@ function updateBadge(host) {
   return h('div', {}, badge);
 }
 
-// How to update one host: the command that updates an enrolled host (install.sh and
-// install.ps1 without a token do that), for its operating system. The address is the
-// one this page was loaded from, which is the server the host belongs to.
+// The first agent that can update itself (`headnode update`, the tray's Update
+// headnode…, D-67). A host on an older one is updated once with the install command.
+const SELF_UPDATE_SINCE = '0.11.0';
+
+// Whether a version like "0.9.2" is at least another, comparing number by number.
+function versionAtLeast(version, minimum) {
+  const a = String(version).split('.').map(Number);
+  const b = minimum.split('.').map(Number);
+  if (a.some(Number.isNaN)) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+// How to update one host, for its operating system and the agent it runs. An agent from
+// 0.11.0 on updates itself: it fetches the newest program from this server, checks that
+// it runs, and swaps it in. An older one is updated once by the install command, which
+// does the same; the address in it is the one this page was loaded from, which is the
+// server the host belongs to.
 function updateDialog(host) {
   const server = location.origin;
+  const selfUpdate = versionAtLeast(host.version, SELF_UPDATE_SINCE);
   const fields = [
     h('p', {}, host.name + ' runs headnode-agent ' + host.version + '. This server has ' + host.latest_version + '. ' +
       'The update keeps the host\'s identity: it replaces the program and restarts the agent.'),
   ];
   if (isWindows(host)) {
-    fields.push(
-      h('p', {}, 'On the Windows machine, click the headnode icon in the tray and choose Update headnode…, then approve ' +
-        'the prompt that asks for an administrator. From afar: the Screen tab, then the tray icon, then the same menu item. ' +
-        'Or run this in PowerShell opened as administrator:'),
-      commandBlock('& ([scriptblock]::Create((irm ' + server + '/install.ps1)))'),
-      h('p', { class: 'sub' }, 'A host that runs an agent from before the tray menu had Update headnode… needs this command once. ' +
-        'The agent restarts during the update, so a screen opened through it closes: Reconnect after a few seconds.'));
-  } else {
+    if (selfUpdate) {
+      fields.push(
+        h('p', {}, 'On the Windows machine, click the headnode icon in the tray and choose Update headnode…, then approve ' +
+          'the prompt that asks for an administrator. Nothing else opens: the icon closes and comes back when it is done. ' +
+          'From afar: the Screen tab, then the tray icon, then the same menu item.'),
+        h('p', { class: 'sub' }, 'The agent restarts during the update, so a screen opened through it closes: Reconnect after a few seconds. ' +
+          'If the update fails, the tray icon says why.'));
+    } else {
+      fields.push(
+        h('p', {}, 'This agent is too old to update itself. Once, in PowerShell opened as administrator on the machine (or through the Screen tab):'),
+        commandBlock('& ([scriptblock]::Create((irm ' + server + '/install.ps1)))'),
+        h('p', { class: 'sub' }, 'After that, Update headnode… in the tray icon does it.'));
+    }
+  } else if (selfUpdate) {
     fields.push(
       h('p', {}, 'On the host, in its Shell tab here (or any terminal on it), run:'),
-      commandBlock('curl -fsSL ' + server + '/install.sh | sudo sh'),
+      commandBlock('sudo headnode update'),
       h('p', { class: 'sub' }, 'It needs sudo, so it asks for the password. The agent restarts at the end, which ends the shell ' +
         'the command was run from: open the Shell tab again after a few seconds.'));
+  } else {
+    fields.push(
+      h('p', {}, 'This agent is too old to update itself. Once, on the host, in its Shell tab here (or any terminal on it), run:'),
+      commandBlock('curl -fsSL ' + server + '/install.sh | sudo sh'),
+      h('p', { class: 'sub' }, 'After that, sudo headnode update does it. The command needs sudo, so it asks for the password, and ' +
+        'the agent restarts at the end, which ends the shell: open the Shell tab again after a few seconds.'));
   }
   fields.push(h('p', { class: 'sub' }, 'The badge goes away after the host reconnects with the new version.'));
   openDialog({

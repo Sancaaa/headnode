@@ -2,6 +2,8 @@ package agent
 
 import (
 	"encoding/binary"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,25 +97,49 @@ func assertNoRights(t *testing.T, what, rights string, forbidden ...string) {
 	}
 }
 
-func TestUpdateArguments(t *testing.T) {
-	got, ok := updateArguments("https://headnode.example.com")
-	want := `-NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://headnode.example.com/install.ps1))); Read-Host 'Press Enter to close'"`
-	if !ok || got != want {
-		t.Errorf("updateArguments = %q, %v; want %q", got, ok, want)
+func TestUpdateResult(t *testing.T) {
+	now := time.Unix(1_763_700_000, 0)
+	if got := updateResultLine(nil, now); got != "ok 1763700000" {
+		t.Errorf("updateResultLine(nil) = %q", got)
 	}
-	if _, ok := updateArguments("https://10.0.0.5:8443"); !ok {
-		t.Error("a host with a port was refused")
+	line := updateResultLine(errors.New("stop the service:\n  access   denied"), now)
+	if line != "failed 1763700000 stop the service: access denied" {
+		t.Errorf("updateResultLine(error) = %q: want one line with single spaces", line)
 	}
-	// Anything that could end the quoted address and add a command of its own.
-	for _, bad := range []string{
-		"", "http://headnode.example.com", "headnode.example.com",
-		`https://x.com"; calc; "`, "https://x.com;calc", "https://x.com'", "https://x.com/path",
-		"https://x.com`calc", "https://x.com$(calc)", "https://user@x.com", "https://x.com:99999999",
-		"https://x.com\n", "https:// x.com", "https://x.com#", "https://-", "https://.com",
-	} {
-		if _, ok := updateArguments(bad); ok {
-			t.Errorf("updateArguments(%q) was accepted: it could change the command", bad)
+	failed, at, reason, ok := parseUpdateResult(line)
+	if !ok || !failed || !at.Equal(now) || reason != "stop the service: access denied" {
+		t.Errorf("parseUpdateResult(%q) = %v, %v, %q, %v", line, failed, at, reason, ok)
+	}
+	if failed, _, _, ok := parseUpdateResult("ok 1763700000"); !ok || failed {
+		t.Error("an ok line should parse as not failed")
+	}
+	for _, bad := range []string{"", "ok", "ok soon", "done 1763700000", "failed"} {
+		if _, _, _, ok := parseUpdateResult(bad); ok {
+			t.Errorf("parseUpdateResult(%q) accepted a line that is not one", bad)
 		}
+	}
+	long := updateResultLine(errors.New(strings.Repeat("x", 500)), now)
+	if len(long) > len("failed 1763700000 ")+200 {
+		t.Errorf("a long reason was not cut: %d characters", len(long))
+	}
+}
+
+func TestAssetNameAndNewProgramPath(t *testing.T) {
+	for goos, goarch := range map[string]string{"linux/amd64": "headnode-agent-linux-amd64", "linux/arm64": "headnode-agent-linux-arm64", "windows/amd64": "headnode-agent-windows-amd64.exe"} {
+		parts := strings.Split(goos, "/")
+		if got, ok := assetName(parts[0], parts[1]); !ok || got != goarch {
+			t.Errorf("assetName(%s) = %q, %v; want %q", goos, got, ok, goarch)
+		}
+	}
+	if _, ok := assetName("darwin", "arm64"); ok {
+		t.Error("assetName offered a program for a system the server has none for")
+	}
+	// Next to the installed program, and still ending in .exe where that matters.
+	if got := newProgramPath(filepath.Join("usr", "local", "bin", "headnode-agent")); got != filepath.Join("usr", "local", "bin", "headnode-agent.new") {
+		t.Errorf("newProgramPath (Linux) = %q", got)
+	}
+	if got := newProgramPath(filepath.Join("Program Files", "headnode", "headnode-agent.exe")); got != filepath.Join("Program Files", "headnode", "headnode-agent.new.exe") {
+		t.Errorf("newProgramPath (Windows) = %q", got)
 	}
 }
 

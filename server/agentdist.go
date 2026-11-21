@@ -33,7 +33,10 @@ func (s *Server) UseAgentDir(dir string) {
 // server is the enroll token, not the binary.
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !agentBinaries[name] {
+	// VERSION is the one other file: the version of what is in the folder, which the
+	// agent's `update` command reads to see whether it is behind (D-67). A few
+	// characters, with no secret in them, like the programs.
+	if !agentBinaries[name] && name != "VERSION" {
 		writeError(w, http.StatusNotFound, "unknown download")
 		return
 	}
@@ -58,8 +61,12 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	if name == "VERSION" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	}
 	// A rebuilt program must reach the next install, not a copy a proxy kept.
 	w.Header().Set("Cache-Control", "no-cache")
 	// ServeContent adds Content-Length, Last-Modified and Range support.
