@@ -271,6 +271,7 @@ body.logged-out .main { background: var(--bg-app); }
 .terminal-bar .fullscreen { margin-left: auto; }
 /* In full screen the box is the whole screen: no fixed height, no rounded corners. */
 .terminal:fullscreen, .screen:fullscreen { height: 100vh; min-height: 0; border-radius: 0; }
+.screen:fullscreen { background: #111010; }
 
 /* the host picker in the Send file dialog */
 .host-picker {
@@ -332,7 +333,27 @@ body.logged-out .main { background: var(--bg-app); }
 .screen {
   height: calc(100vh - 300px); min-height: 360px;
   background: var(--terminal-bg); border-radius: var(--radius); overflow: hidden;
+  position: relative; display: flex;
 }
+/* The screen is drawn into .screen-view, which is made bigger than .screen-pan to zoom
+   in; .screen-pan then scrolls. margin: auto centers a small view without making the
+   left of a big one unreachable (centering with flex or grid would). */
+.screen-pan { flex: 1; min-width: 0; overflow: auto; display: flex; }
+.screen-view { flex: none; margin: auto; width: 100%; height: 100%; }
+/* While Pan is on, this sheet covers the screen: dragging it scrolls, nothing is sent to the host. */
+.screen-grab { position: absolute; inset: 0; cursor: grab; }
+.screen-grab.dragging { cursor: grabbing; }
+/* Zoom buttons over the top of the screen, inside the box so full screen has them too.
+   Faint until the mouse is near, so they cover as little of the remote screen as possible. */
+.screen-tools {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2;
+  display: flex; align-items: center; gap: 4px; padding: 4px;
+  background: rgba(24, 23, 23, .85); border-radius: var(--radius);
+  opacity: .35; transition: opacity .15s;
+}
+.screen-tools:hover, .screen-tools:focus-within { opacity: 1; }
+.zoom-label { min-width: 44px; text-align: center; color: #f7f5f4; font-size: 12px; font-variant-numeric: tabular-nums; }
+.screen-tools .btn.active { background: var(--accent); color: #fff; border-color: transparent; }
 
 /* the Add host dialog: one heading per operating system's command */
 .command-title { margin: 16px 0 0; font-size: 14px; font-weight: 600; }

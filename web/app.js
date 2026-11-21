@@ -427,15 +427,11 @@ function hasVnc(host) {
 }
 
 // The VNC button on a host's row. A tunnel needs the same role as a shell
-// (can_shell), and the host has to be online. It is offered for any host, not
-// only Windows ones, but only when a VNC server answers on the host: a Linux
-// server without a desktop would otherwise show a button that cannot work.
-//
-// A host whose VNC server is installed but switched off (to save the machine's
-// resources, D-51) gets a Start VNC button here instead.
+// (can_shell), and the host has to be online. It is always offered then (D-65): the
+// Screen page it opens shows the screen, or, when VNC is switched off, a Start VNC
+// button, or what is missing on a host that has no VNC server at all.
 function vncButton(host) {
   if (!host.online || !host.can_shell) return null;
-  if (!hasVnc(host)) return canSwitchVnc(host) ? vncSwitch(host, true) : null;
   const link = h('a', { class: 'btn btn-small', href: screenHref(host.id) }, icon(ICON_HOSTS), 'VNC');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
@@ -446,29 +442,6 @@ function vncButton(host) {
 // Linux desktop (install.sh makes sure it is installed).
 function canSwitchVnc(host) {
   return Boolean(host.online && host.can_shell && host.heartbeat && host.heartbeat.vnc_control);
-}
-
-// The button that starts or stops the VNC server on a host. There is no answer to
-// wait for: the agent changes the service and reports the new state in its next
-// heartbeat, which the Hosts page polls, and the page redraws when it arrives.
-// Until then the button says what is going on.
-function vncSwitch(host, enabled) {
-  const label = enabled ? 'Start VNC' : 'Stop VNC';
-  const b = button(label, 'btn btn-small', async (event) => {
-    event.stopPropagation(); // not also the row's own link
-    b.disabled = true;
-    b.textContent = enabled ? 'Starting…' : 'Stopping…';
-    const result = await api('POST', '/api/hosts/' + host.id + '/vnc', { enabled });
-    if (result.ok) return;
-    b.textContent = 'Failed';
-    b.title = plain(errorText(result));
-    setTimeout(() => {
-      b.disabled = false;
-      b.textContent = label;
-      b.title = '';
-    }, 4000);
-  });
-  return b;
 }
 
 // "CPU 3% / RAM 7% / Disk 5%", with a warning color per value. Offline hosts
@@ -710,11 +683,9 @@ function hostTabs(host, active) {
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
     isWindows(host) ? null : h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
     isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'),
-    // Only where a VNC server answers (D-50). The tab of the page you are on
-    // stays, so it does not vanish under you when the server stops.
-    hasVnc(host) || active === 'screen'
-      ? h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen')
-      : null);
+    // Always (D-65): the Screen page is where VNC is started, so it cannot wait for
+    // VNC to be running. It says what to do when there is nothing to show.
+    h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen'));
 }
 
 // What the Terminal and Files pages say when someone opens them for a Windows
@@ -905,7 +876,36 @@ function renderScreenPage(host) {
   const cad = button('Ctrl+Alt+Del', 'btn btn-small', () => {});
   cad.disabled = true; // until connected
   const toggle = button('Disconnect', 'btn btn-small', () => {});
-  const box = h('div', { class: 'screen' });
+
+  // The screen is three boxes (D-65). `view` is what noVNC draws into, and it scales the
+  // screen to fit `view`. `pan` is a scrolling box around it: when `view` is made bigger
+  // than `pan` the picture is zoomed in, and the scrollbars move around it. That is how a
+  // computer with several monitors, which is far wider than the window, can be looked at
+  // closely. `box` holds both, and is what goes full screen.
+  const view = h('div', { class: 'screen-view' });
+  const pan = h('div', { class: 'screen-pan' }, view);
+  // While Pan is on this sheet is over the screen: dragging it scrolls `pan`, and nothing
+  // reaches the remote computer.
+  const grab = h('div', { class: 'screen-grab', hidden: '' });
+  const tools = {
+    fit: button('Fit', 'btn btn-small', () => {}),
+    out: button('−', 'btn btn-small', () => {}),
+    in: button('+', 'btn btn-small', () => {}),
+    actual: button('1:1', 'btn btn-small', () => {}),
+    pan: button('Pan', 'btn btn-small', () => {}),
+    label: h('span', { class: 'zoom-label' }, 'Fit'),
+  };
+  tools.fit.title = 'Fit the whole screen in the window';
+  tools.out.title = 'Zoom out';
+  tools.in.title = 'Zoom in';
+  tools.actual.title = 'Actual size: one pixel of the remote screen is one pixel here';
+  tools.pan.title = 'Drag the screen around while zoomed in (the scrollbars and the mouse wheel work too)';
+  for (const b of [tools.fit, tools.out, tools.in, tools.actual, tools.pan]) b.disabled = true; // until connected
+  // Inside the box, not in the bar above it: the bar is not there in full screen.
+  const toolbar = h('div', { class: 'screen-tools', hidden: '' }, tools.fit, tools.out, tools.label, tools.in, tools.actual, tools.pan);
+  tools.bar = toolbar; // shown by mountScreen while there is a screen to zoom
+  const box = h('div', { class: 'screen' }, pan, grab, toolbar);
+
   // Stop VNC / Start VNC switches the server on the host off or on (D-51), to save
   // its resources. Its label follows the host's real state, which mountScreen
   // keeps asking for: this page is drawn once and the poll does not redraw it.
@@ -916,7 +916,7 @@ function renderScreenPage(host) {
   page.push(h('div', { class: 'screen-bar' }, status, h('div', { class: 'screen-actions' }, cad, toggle, power, fullscreen)), box);
 
   // Built after the box is on the page: noVNC measures it to scale the screen.
-  queueMicrotask(() => mountScreen(host, box, status, cad, toggle, power));
+  queueMicrotask(() => mountScreen(host, { box, pan, view, grab, tools, status, cad, toggle, power }));
   return page;
 }
 
@@ -944,7 +944,8 @@ function askVncPassword(hostName) {
   });
 }
 
-async function mountScreen(host, box, status, cad, toggle, power) {
+async function mountScreen(host, ui) {
+  const { box, pan, view, grab, tools, status, cad, toggle, power } = ui;
   let disposed = false;
   let rfb = null;
   let ws = null;
@@ -955,11 +956,13 @@ async function mountScreen(host, box, status, cad, toggle, power) {
   let wasUp = hasVnc(host);
   let pending = null;        // { enabled, at } while a Start or Stop VNC is in flight
   let watcher = null;
+  let sizeWatch = null;      // follows the size of the box the screen is shown in
 
   pageSession = {
     dispose() {
       disposed = true;
       clearInterval(watcher);
+      if (sizeWatch) sizeWatch.disconnect();
       if (rfb) {
         try { rfb.disconnect(); } catch (err) { /* already gone */ }
       }
@@ -1010,14 +1013,19 @@ async function mountScreen(host, box, status, cad, toggle, power) {
     // Added before noVNC attaches its own handlers, so this runs first and the
     // reason is known by the time noVNC reports the disconnect.
     ws.addEventListener('close', (event) => { closeReason = plain(event.reason); });
-    rfb = new RFB(box, ws, {});
-    rfb.scaleViewport = true;   // the whole screen, scaled to the window
+    rfb = new RFB(view, ws, {});
+    rfb.scaleViewport = true;   // the whole screen, scaled to `view` (which zoom resizes)
     rfb.resizeSession = false;  // never change the host's own resolution
     rfb.background = '#111010';
+    // The remote screen can change size (a monitor was plugged in, the resolution was
+    // changed): noVNC then changes its canvas, and the zoom has to follow.
+    const canvas = view.querySelector('canvas');
+    if (canvas) new MutationObserver(layout).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
     rfb.addEventListener('connect', () => {
       everConnected = true;
       status.textContent = 'Connected';
       cad.disabled = false;
+      layout();
       rfb.focus();
     });
     rfb.addEventListener('desktopname', (event) => {
@@ -1050,6 +1058,7 @@ async function mountScreen(host, box, status, cad, toggle, power) {
       rfb = null;
       ws = null;
       if (disposed) return;
+      layout(); // the buttons that need a screen are switched off again
       // For whoever has to find out why a connection dropped: the browser's console.
       console.info('noVNC disconnected', { clean: event.detail && event.detail.clean, tunnelReason: closeReason, everConnected });
       ended(closeReason, event.detail && event.detail.clean);
@@ -1091,6 +1100,7 @@ async function mountScreen(host, box, status, cad, toggle, power) {
     if (pending && (pending.enabled === up || Date.now() - pending.at > 20000)) pending = null;
     power.disabled = pending !== null;
     power.textContent = pending ? (pending.enabled ? 'Starting…' : 'Stopping…') : (up ? 'Stop VNC' : 'Start VNC');
+    power.classList.toggle('btn-primary', !up && !pending); // Start VNC is the thing to press when there is no screen
   }
 
   power.addEventListener('click', async () => {
@@ -1128,12 +1138,108 @@ async function mountScreen(host, box, status, cad, toggle, power) {
   watcher = setInterval(watchHost, 2000);
   showPower();
 
+  // ---- Zoom and panning (D-65). noVNC scales the screen to fit `view`; `view` is made as
+  // big as the zoom asks, inside the scrolling box `pan`. Zooming by the size of the box,
+  // and not by scaling the picture with CSS, keeps noVNC's own mapping of the mouse right.
+  let zoom = 'fit'; // 'fit', or how many pixels here one pixel of the remote screen takes (1 = actual size)
+  let panning = false;
+
+  // The remote screen's size in pixels: noVNC's canvas has it, while a screen is shown.
+  function framebuffer() {
+    const canvas = rfb && view.querySelector('canvas');
+    return canvas && canvas.width ? { w: canvas.width, h: canvas.height } : null;
+  }
+  const fitScale = (fb) => Math.min(pan.clientWidth / fb.w, pan.clientHeight / fb.h);
+  const currentScale = (fb) => (zoom === 'fit' ? fitScale(fb) : zoom);
+
+  // Sizes `view` for the zoom, which makes noVNC scale the screen to match.
+  function layout() {
+    const fb = framebuffer();
+    for (const b of [tools.fit, tools.out, tools.in, tools.actual, tools.pan]) b.disabled = !fb;
+    tools.bar.hidden = !fb;
+    if (!fb) {
+      view.style.width = '100%';
+      view.style.height = '100%';
+      tools.label.textContent = 'Fit';
+      setPanning(false);
+      return;
+    }
+    const scale = currentScale(fb);
+    // Rounded down: a pixel too many would show scrollbars when the whole screen fits.
+    view.style.width = Math.floor(fb.w * scale) + 'px';
+    view.style.height = Math.floor(fb.h * scale) + 'px';
+    tools.label.textContent = zoom === 'fit' ? 'Fit' : Math.round(scale * 100) + '%';
+  }
+
+  // Zooming in or out by a step. At or below "fit" it is fit: the whole screen is the
+  // least that is shown, and the most is 8 times.
+  function zoomTo(next) {
+    const fb = framebuffer();
+    if (!fb) return;
+    zoom = next <= fitScale(fb) * 1.001 ? 'fit' : Math.min(next, 8);
+    layout();
+    if (rfb && !panning) rfb.focus(); // the click moved the keyboard to the button
+  }
+  tools.fit.addEventListener('click', () => zoomTo(0));
+  tools.in.addEventListener('click', () => { const fb = framebuffer(); if (fb) zoomTo(currentScale(fb) * 1.25); });
+  tools.out.addEventListener('click', () => { const fb = framebuffer(); if (fb) zoomTo(currentScale(fb) / 1.25); });
+  tools.actual.addEventListener('click', () => {
+    zoom = 1;
+    layout();
+    if (rfb && !panning) rfb.focus();
+  });
+
+  // Pan: while it is on, dragging scrolls the zoomed screen and nothing is sent to the remote computer.
+  function setPanning(on) {
+    panning = on;
+    grab.hidden = !on;
+    tools.pan.classList.toggle('active', on);
+    if (!on && rfb) rfb.focus();
+  }
+  tools.pan.addEventListener('click', () => setPanning(!panning));
+  let drag = null;
+  grab.addEventListener('pointerdown', (event) => {
+    drag = { x: event.clientX, y: event.clientY, left: pan.scrollLeft, top: pan.scrollTop };
+    grab.setPointerCapture(event.pointerId);
+    grab.classList.add('dragging');
+  });
+  grab.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    pan.scrollLeft = drag.left - (event.clientX - drag.x);
+    pan.scrollTop = drag.top - (event.clientY - drag.y);
+  });
+  const endDrag = () => {
+    drag = null;
+    grab.classList.remove('dragging');
+  };
+  grab.addEventListener('pointerup', endDrag);
+  grab.addEventListener('pointercancel', endDrag);
+  grab.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    pan.scrollBy(event.deltaX, event.deltaY);
+  }, { passive: false });
+
+  // The box changes size with the window, and in full screen.
+  sizeWatch = new ResizeObserver(layout);
+  sizeWatch.observe(pan);
+
+  // VNC is not running on this host: say what to do, instead of trying a connection that cannot work.
+  function showOff() {
+    cad.disabled = true;
+    toggle.textContent = 'Reconnect';
+    status.textContent = canSwitchVnc(latest)
+      ? 'VNC is switched off on this host. Press Start VNC to turn it on.'
+      : 'No VNC server is running on this host. Install one that accepts connections from this machine only ' +
+        '(docs/windows.md, docs/linux-screen.md), then press Reconnect.';
+  }
+
   toggle.addEventListener('click', () => {
     if (rfb) rfb.disconnect(); // ends the session on the host: the tunnel closes with it
     else connect();
   });
   cad.addEventListener('click', () => { if (rfb) rfb.sendCtrlAltDel(); });
-  connect();
+  if (hasVnc(host)) connect();
+  else showOff();
 }
 
 // -------------------------------------------------------------- Files page
