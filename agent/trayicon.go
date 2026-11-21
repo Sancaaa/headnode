@@ -10,9 +10,13 @@ import (
 // when it is not. A Windows icon file (.ico) is a small header followed by one bitmap
 // per size, and the tray library wants those bytes.
 
-// trayIcon returns an .ico holding the mark in the given color, at 16 and 32 pixels.
+// BrandIcon is the mark in the logo's own blue (#4b70cc), for the Start menu entry.
+func BrandIcon() []byte { return trayIcon(0x4b, 0x70, 0xcc) }
+
+// trayIcon returns an .ico holding the mark in the given color, at 16, 32 and 48 pixels
+// (the tray uses the small ones, the Start menu the large one).
 func trayIcon(r, g, b uint8) []byte {
-	sizes := []int{16, 32}
+	sizes := []int{16, 32, 48}
 
 	var images [][]byte
 	for _, size := range sizes {

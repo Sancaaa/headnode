@@ -24,8 +24,10 @@ const usage = `usage:
   headnode-agent service uninstall                remove that service
   headnode-agent service allow -sid SID           (Windows, Administrator) let that user switch the service and
                                                   TightVNC's on and off without administrator rights
-  headnode-agent tray                             (Windows) a tray icon: connected or not, Turn headnode off / on,
-                                                  Start / Stop VNC
+  headnode-agent tray [-start]                    (Windows) a tray icon: connected or not, Turn headnode off / on,
+                                                  Start / Stop VNC, Exit. -start also turns headnode on if it
+                                                  is off: that is what the Start menu entry runs
+  headnode-agent icon -out FILE.ico               write the logo as an icon file (for the Start menu entry)
 
 The service's default credentials file is /etc/headnode/agent.json on Linux and
 %ProgramData%\headnode\agent.json on Windows.`
@@ -43,9 +45,9 @@ func main() {
 	case "service":
 		serviceCommand(os.Args[2:])
 	case "tray":
-		if err := agent.RunTray(); err != nil {
-			log.Fatal(err)
-		}
+		trayCommand(os.Args[2:])
+	case "icon":
+		iconCommand(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -106,6 +108,33 @@ func serviceCommand(args []string) {
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
+	}
+}
+
+// trayCommand shows the Windows tray icon (M9). -start is for the Start menu entry:
+// the person opened the app on purpose, so headnode is turned on too (D-59). At login
+// the icon starts without it, and shows whatever state headnode was left in.
+func trayCommand(args []string) {
+	fs := flag.NewFlagSet("tray", flag.ExitOnError)
+	start := fs.Bool("start", false, "also turn headnode on if it is off")
+	fs.Parse(args)
+	if err := agent.RunTray(*start); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// iconCommand writes the logo's mark as an .ico file. install.ps1 uses it as the picture
+// of the Start menu entry, so the program needs no icon resource of its own.
+func iconCommand(args []string) {
+	fs := flag.NewFlagSet("icon", flag.ExitOnError)
+	out := fs.String("out", "", "where to write the .ico file")
+	fs.Parse(args)
+	if *out == "" {
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
+	if err := os.WriteFile(*out, agent.BrandIcon(), 0o644); err != nil {
+		log.Fatal(err)
 	}
 }
 

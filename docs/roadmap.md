@@ -122,6 +122,8 @@ The idea: a person at the Windows machine must be able to turn headnode off, and
 - [ ] Decisions entry for how the icon is drawn: the library `fyne.io/systray` (preferred: far less code, pure Go on Windows; needs the owner's approval before it is added to `go.mod`, per CLAUDE.md) or `golang.org/x/sys/windows` directly (no new dependency, about 200 lines of Windows message-loop code). Also how the tray talks to the service: service permissions (preferred) or a local named pipe
 - [ ] Guide in `docs/windows.md`: what the icon does, how to check by hand that headnode is off (`Get-Service headnode-agent`, `Get-Process headnode-agent`, nothing on port 5900)
 
+- [ ] **Exit** in the menu (in place of Quit) turns headnode off completely and closes the icon; **headnode** is a searchable Start menu app that shows the icon again and turns headnode on (D-59)
+
 **Done when:** after installing with the one command, a tray icon appears; "Turn headnode off" turns the icon grey, the host goes *offline* in the dashboard within a minute, `Get-Service headnode-agent` says `Stopped` and `Manual` (D-58), no `headnode-agent` process exists, and a reboot does not bring it back; "Turn headnode on" reverses all of it; the icon returns at the next login on its own. Linux has no tray (a Raspberry Pi or a server is managed with `systemctl`).
 
 ---

@@ -41,7 +41,8 @@ The install command also puts a **headnode icon** in the tray (the area by the c
 - **Green:** headnode is connected to the server. **Grey:** it is off, stopped, or cannot reach the server. Hover the icon for the words.
 - **Turn headnode off** stops headnode on this computer **and** keeps it from starting at boot, so nothing of headnode runs and the host goes *offline* in the dashboard within a minute. **Turn headnode on** reverses all of it.
 - **Start VNC / Stop VNC** (when TightVNC is installed, and only while headnode is on) does what the dashboard's button does, from here: the icon asks the agent, and the agent switches TightVNC.
-- **Quit** closes only the icon. headnode keeps running, or stays off, as it was. The icon is not headnode.
+- **Exit** turns headnode off completely (the same as Turn headnode off, and the screen is switched off too) **and** closes the icon. Nothing of headnode runs on the computer then.
+- **To bring it back after Exit,** type **headnode** in the Start menu search and open it, like any app. That shows the icon again **and turns headnode on**. (If the icon is already there, opening the app just makes sure headnode is on.) The icon also comes back by itself at your next login, in the *Off* state, and headnode stays off until you turn it on.
 
 Only the account that ran the install command may use the icon's switch (the service's permissions name that one account); other people logged in on the same computer cannot turn headnode off. That account may start the `headnode-agent` service and send it the icon's requests, nothing more: it may not reconfigure any service, because a person who can change a service's program can run anything as the system (D-58). `-NoTray` at the end of the install command skips the icon and the permissions. Running the install command again also turns headnode on again.
 

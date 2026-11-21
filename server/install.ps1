@@ -269,10 +269,27 @@ if ($NoTray) {
         if (-not (Test-Path $run)) { New-Item -Path $run | Out-Null }
         Set-ItemProperty -Path $run -Name 'headnode-tray' -Value "`"$Bin`" tray"
 
+        # The "headnode" app in the Start menu (D-59), so that typing headnode in the search
+        # finds it, like any other app. It opens the tray icon and turns headnode on, so
+        # after Exit it is how headnode comes back. Per user, like the permission above. Its
+        # picture is the logo, written by the program itself.
+        $iconFile = Join-Path $Dir 'headnode.ico'
+        & $Bin icon -out $iconFile
+        $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'headnode.lnk'
+        $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
+        $link.TargetPath = $Bin
+        $link.Arguments = 'tray -start'
+        $link.WorkingDirectory = $Dir
+        $link.WindowStyle = 7   # minimized: it is a console program that has nothing to show
+        $link.Description = 'headnode: show the tray icon and turn headnode on'
+        if (Test-Path $iconFile) { $link.IconLocation = $iconFile }
+        $link.Save()
+
         # Hidden window: it is a console program, and has nothing to print. The copy started
         # here runs with the rights of this window; the one started at login does not.
         Start-Process -FilePath $Bin -ArgumentList 'tray' -WindowStyle Hidden
         Write-Host 'The headnode icon is in the tray (click ^ by the clock if it is hidden).'
+        Write-Host 'To bring it back after Exit, type headnode in the Start menu.'
     } catch {
         Write-Warning "The tray icon was not set up: $($_.Exception.Message)"
         Write-Warning 'The agent works without it. Run this command again, or use -NoTray to leave it out.'

@@ -259,7 +259,15 @@ func (h *serviceHandler) Execute(args []string, requests <-chan svc.ChangeReques
 				if err := setStartType(serviceName, mgr.StartManual); err != nil {
 					slog.Error("could not set the service to start by hand", "err", err)
 				}
-				slog.Info("turned off from the tray icon")
+				// The screen goes off with headnode (D-59): TightVNC was set up for headnode and
+					// nothing but the agent reaches it, so it need not keep running. Still as
+					// LocalSystem, which is why the icon needs no rights on it. Best effort.
+					if canControlVNC() {
+						if err := setVNCService(false); err != nil {
+							slog.Warn("could not switch the screen off", "err", err)
+						}
+					}
+					slog.Info("turned off from the tray icon")
 				stop()
 				return false, 0
 			case ctlVNCOn, ctlVNCOff:

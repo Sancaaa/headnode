@@ -100,10 +100,10 @@ func assertNoRights(t *testing.T, what, rights string, forbidden ...string) {
 
 func TestTrayIconIsAValidIcon(t *testing.T) {
 	ico := trayIcon(0x2e, 0x9e, 0x5b)
-	if binary.LittleEndian.Uint16(ico[2:]) != 1 || binary.LittleEndian.Uint16(ico[4:]) != 2 {
-		t.Fatal("not an icon with two images")
+	if binary.LittleEndian.Uint16(ico[2:]) != 1 || binary.LittleEndian.Uint16(ico[4:]) != 3 {
+		t.Fatal("not an icon with three images")
 	}
-	for i, size := range []int{16, 32} {
+	for i, size := range []int{16, 32, 48} {
 		entry := ico[6+16*i:]
 		if int(entry[0]) != size || int(entry[1]) != size {
 			t.Errorf("image %d: size %dx%d, want %d", i, entry[0], entry[1], size)

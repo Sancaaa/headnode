@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"fyne.io/systray"
@@ -23,13 +24,18 @@ import (
 // LocalSystem, does that when it is asked.
 //
 // "Off" really is off: the service is stopped and set to start only by hand, so
-// nothing of headnode runs until it is turned on. The icon is not headnode: closing it
-// (Quit) changes nothing about the service.
+// nothing of headnode runs until it is turned on. Two ways to get there (D-59):
+//   - Turn headnode off keeps the icon, so one click turns it on again;
+//   - Exit does the same and closes the icon too. Opening the headnode app (the Start
+//     menu entry, `tray -start`) brings the icon back and turns headnode on.
+// The icon alone is not headnode: it is only a way to reach it.
 
 const trayRunValue = "headnode-tray" // the name of the login entry, in install.ps1 too
+const trayShortcut = "headnode.lnk"  // the Start menu entry, in install.ps1 too
 
-// RunTray shows the icon and runs until Quit is chosen.
-func RunTray() error {
+// RunTray shows the icon and runs until Exit is chosen. With startAgent (the Start menu
+// entry: the person opened the app on purpose) headnode is turned on first, if it is off.
+func RunTray(startAgent bool) error {
 	// One icon per person: the login entry and the installer both start one, and a
 	// second copy would only be a second icon.
 	name, err := windows.UTF16PtrFromString(`Local\headnode-tray`)
@@ -41,8 +47,15 @@ func RunTray() error {
 		return fmt.Errorf("create the single-instance lock: %w", err)
 	}
 	defer windows.CloseHandle(lock)
-	if err != nil {
-		return nil // already running
+	alreadyRunning := err != nil
+
+	// An error here is not worth stopping for: the icon opens and says what state
+	// headnode is in, and the person can press Turn headnode on.
+	if startAgent {
+		switchAgent(true)
+	}
+	if alreadyRunning {
+		return nil // its icon is there already, and now headnode is on
 	}
 
 	// This program is a console program, and started at login it would keep an empty
@@ -66,13 +79,13 @@ func trayReady(green, grey []byte) {
 	screen := systray.AddMenuItem("Start VNC", "Share this computer's screen with headnode")
 	screen.Hide() // until we know that TightVNC is installed
 	systray.AddSeparator()
-	quit := systray.AddMenuItem("Quit", "Close this icon. headnode keeps running or stays off as it is.")
+	exit := systray.AddMenuItem("Exit", "Turn headnode off and close this icon. Open headnode from the Start menu to bring it back.")
 
-	go trayLoop(status, toggle, screen, quit, green, grey)
+	go trayLoop(status, toggle, screen, exit, green, grey)
 }
 
 // trayLoop keeps the icon up to date and does what the menu asks, one thing at a time.
-func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte) {
+func trayLoop(status, toggle, screen, exit *systray.MenuItem, green, grey []byte) {
 	var (
 		problem      string // the last action's error, shown for a while
 		problemUntil time.Time
@@ -140,7 +153,19 @@ func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte
 			}
 			screen.Enable()
 			refresh()
-		case <-quit.ClickedCh:
+		case <-exit.ClickedCh:
+			// Exit: headnode off completely, then the icon goes. If turning it off fails the
+			// icon stays and says why: closing it would leave headnode running with no
+			// way to see that.
+			exit.SetTitle("Exiting…")
+			exit.Disable()
+			if err := switchAgent(false); err != nil {
+				fail("Could not turn headnode off", err)
+				exit.SetTitle("Exit")
+				exit.Enable()
+				refresh()
+				continue
+			}
 			systray.Quit()
 			return
 		}
@@ -242,14 +267,15 @@ func askAgentVNC(on bool) error {
 	return nil
 }
 
-// removeTrayAutostart deletes the login entry that install.ps1 made for the person
-// running this (the entry is per user). Part of `service uninstall`; a failure, or no
-// entry, is not worth an error: the point is that afterwards there is none.
+// removeTrayAutostart deletes the login entry and the Start menu entry that install.ps1
+// made for the person running this (both are per user). Part of `service uninstall`; a
+// failure, or no entry, is not worth an error: the point is that afterwards there is none.
 func removeTrayAutostart() {
-	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
-	if err != nil {
-		return
+	if key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE); err == nil {
+		key.DeleteValue(trayRunValue)
+		key.Close()
 	}
-	defer key.Close()
-	key.DeleteValue(trayRunValue)
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		os.Remove(filepath.Join(appData, `Microsoft\Windows\Start Menu\Programs`, trayShortcut))
+	}
 }
