@@ -426,12 +426,20 @@ function hasVnc(host) {
   return Boolean(host.online && host.heartbeat && host.heartbeat.vnc);
 }
 
-// The VNC button on a host's row. A tunnel needs the same role as a shell
-// (can_shell), and the host has to be online. It is always offered then (D-65): the
-// Screen page it opens shows the screen, or, when VNC is switched off, a Start VNC
-// button, or what is missing on a host that has no VNC server at all.
+// Whether this host has a screen to show at all (D-65): a Windows host always has one,
+// and any other host has one if the agent found a VNC server running, or can start
+// one, which it can only when a desktop is running (wayvnc or x11vnc is installed for
+// it). A headless server (no display) is neither, so it gets no Screen tab and no VNC
+// button. A tunnel needs the same role as a shell, so a person without it sees none either.
+function hasScreen(host) {
+  return Boolean(host.can_shell && (isWindows(host) || hasVnc(host) || canSwitchVnc(host)));
+}
+
+// The VNC button on a host's row. The host has to be online and have a screen. It is
+// offered whether or not VNC is running (D-65): the Screen page it opens shows the
+// screen, or, when VNC is switched off, a Start VNC button, or what is missing.
 function vncButton(host) {
-  if (!host.online || !host.can_shell) return null;
+  if (!host.online || !hasScreen(host)) return null;
   const link = h('a', { class: 'btn btn-small', href: screenHref(host.id) }, icon(ICON_HOSTS), 'VNC');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
@@ -683,9 +691,12 @@ function hostTabs(host, active) {
     h('a', { href: hostLink(host.id), class: active === 'overview' ? 'active' : null }, 'Overview'),
     isWindows(host) ? null : h('a', { href: terminalHref(host.id), class: active === 'terminal' ? 'active' : null }, 'Terminal'),
     isWindows(host) ? null : h('a', { href: filesHref(host.id), class: active === 'files' ? 'active' : null }, 'Files'),
-    // Always (D-65): the Screen page is where VNC is started, so it cannot wait for
-    // VNC to be running. It says what to do when there is nothing to show.
-    h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen'));
+    // Where there is a screen (D-65): the Screen page is where VNC is started, so it
+    // cannot wait for VNC to be running; but a server with no display has none. The tab of
+    // the page you are on stays, so it does not vanish under you.
+    hasScreen(host) || active === 'screen'
+      ? h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen')
+      : null);
 }
 
 // What the Terminal and Files pages say when someone opens them for a Windows
