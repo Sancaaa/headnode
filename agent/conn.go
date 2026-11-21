@@ -23,10 +23,11 @@ import (
 // (system info and the Windows service), and 0.8.0 the "vnc" flag in the
 // heartbeat (D-50) and starting and stopping the VNC server (D-51), and 0.9.0
 // the same for a Linux desktop (D-54), and 0.9.1 the tray icon's safer service
-// permissions (D-58): an older agent ignores the command, stays silent or answers
-// "unknown operation", so the version is how a person can tell whether a host is
-// up to date.
-const Version = "0.9.1"
+// permissions (D-58), and 0.9.2 the security fixes of D-62 to D-64 (its own
+// credentials never sent, the tray status in the registry, VNC passwords): an older
+// agent ignores the command, stays silent or answers "unknown operation", so the
+// version is how a person can tell whether a host is up to date.
+const Version = "0.9.2"
 
 const (
 	heartbeatInterval = 20 * time.Second
@@ -54,6 +55,8 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := readHostInfo(); err != nil {
 		return fmt.Errorf("read host info: %w", err)
 	}
+	// Before the first connection, so before any file session can start (D-62).
+	secretFile = cfg.Path
 
 	attempt := 0
 	for {
@@ -197,6 +200,9 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 		prevCPU = cur
 		hb.VNC = vnc.listening()
 		hb.VNCControl = canControlVNC()
+		if hb.VNC {
+			hb.VNCPassword = vncPassword() // for the server alone, never shown in a host list (D-64)
+		}
 		if err := send(connCtx, conn, protocol.TypeHeartbeat, hb); err != nil {
 			return err
 		}

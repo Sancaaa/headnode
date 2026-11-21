@@ -12,9 +12,9 @@
 #   -NoVnc              do not touch VNC (you have your own, or want no screen access)
 #   -ReplaceVnc         uninstall TightVNC 4 if it is there (the browser viewer cannot log
 #                       in to it) and install TightVNC 2.8.90 in its place
-#   -VncPassword SECRET ask for this password when connecting (1 to 8 letters or
-#                       digits; VNC ignores anything past 8). Without it, the
-#                       dashboard login and role are the only gate.
+#   -VncPassword        no longer used, and ignored: the agent gives TightVNC a new random
+#                       password each time it turns the screen on, and the dashboard
+#                       logs in with it by itself (D-64)
 #   -NoTray             no tray icon. Without this option the person who runs the script
 #                       gets an icon (D-57) to turn headnode off and on without
 #                       administrator rights: it starts now and at every login.
@@ -55,10 +55,8 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITEW6432 -ne
 if (-not (Test-Path $Config) -and -not $Token) {
     Fail 'this host is not enrolled yet: give -Token (from the dashboard: Hosts > Add host)'
 }
-# The password goes onto msiexec's command line: plain letters and digits cannot
-# be mistaken for quoting.
-if ($VncPassword -and $VncPassword -notmatch '^[A-Za-z0-9]{1,8}$') {
-    Fail '-VncPassword must be 1 to 8 letters or digits'
+if ($VncPassword) {
+    Write-Warning '-VncPassword is ignored: the agent sets a new VNC password each time the screen is turned on (D-64).'
 }
 
 # Windows PowerShell 5 does not use modern TLS unless told to.
@@ -199,14 +197,21 @@ function Install-Vnc {
         #  - connections from this machine only, which is where the agent comes from
         #  - no firewall rule: a loopback connection needs none, and none must open the port
         #  - Ctrl+Alt+Del can be sent by the dashboard's button
-        $auth = if ($VncPassword) { '1' } else { '0' }
+        #  - a VNC password, always (D-64): without one, any program on this computer could
+        #    take over the screen while VNC is on. This one is random and never shown; the
+        #    agent replaces it each time it turns the screen on, and tells the dashboard.
+        #    Letters and digits only, so it cannot be mistaken for quoting on msiexec's line.
+        $letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        $random = New-Object byte[] 8
+        (New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($random)
+        $firstPassword = -join ($random | ForEach-Object { $letters[$_ % $letters.Length] })
         $msiArgs = @('/i', "`"$msi`"", '/quiet', '/norestart',
             'ADDLOCAL=Server',
             'SERVER_REGISTER_AS_SERVICE=1', 'SERVER_ADD_FIREWALL_EXCEPTION=0', 'SERVER_ALLOW_SAS=1',
             'SET_ALLOWLOOPBACK=1', 'VALUE_OF_ALLOWLOOPBACK=1',
             'SET_LOOPBACKONLY=1', 'VALUE_OF_LOOPBACKONLY=1',
-            'SET_USEVNCAUTHENTICATION=1', "VALUE_OF_USEVNCAUTHENTICATION=$auth")
-        if ($VncPassword) { $msiArgs += @('SET_PASSWORD=1', "VALUE_OF_PASSWORD=$VncPassword") }
+            'SET_USEVNCAUTHENTICATION=1', 'VALUE_OF_USEVNCAUTHENTICATION=1',
+            'SET_PASSWORD=1', "VALUE_OF_PASSWORD=$firstPassword")
         Write-Host 'Installing TightVNC (this host only, as a service)...'
         $p = Start-Process -FilePath msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
         if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Fail "the TightVNC installer failed (exit code $($p.ExitCode))" }

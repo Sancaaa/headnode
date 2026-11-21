@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // Config is what the agent remembers between runs. It is written once by
@@ -12,6 +13,10 @@ type Config struct {
 	Server      string `json:"server"`
 	AgentID     string `json:"agent_id"`
 	AgentSecret string `json:"agent_secret"`
+
+	// Path is where this config was read from (never written into the file). The
+	// file manager refuses to hand that file out (secret.go).
+	Path string `json:"-"`
 }
 
 // LoadConfig reads the file that Enroll wrote.
@@ -26,6 +31,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.Server == "" || cfg.AgentID == "" || cfg.AgentSecret == "" {
 		return Config{}, fmt.Errorf("%s is incomplete: server, agent_id and agent_secret are all required", path)
+	}
+	if cfg.Path, err = filepath.Abs(path); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }

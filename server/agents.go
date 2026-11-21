@@ -120,9 +120,25 @@ func (r *registry) status(id string) (online bool, hb *protocol.Heartbeat) {
 	}
 	if a.heartbeat != nil {
 		copied := *a.heartbeat // hand out a copy so callers cannot race with setHeartbeat
+		// The VNC password never leaves through here: this heartbeat goes into the
+		// host list, which viewers see too (D-64). vncPassword is the one way to it.
+		copied.VNCPassword = ""
 		hb = &copied
 	}
 	return true, hb
+}
+
+// vncPassword is the password of the host's VNC server, from its latest heartbeat,
+// or "" if it has none or is offline. Only handleOpenSession uses it, after checking
+// that the user may open a tunnel to the host (D-64).
+func (r *registry) vncPassword(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a, ok := r.online[id]
+	if !ok || a.heartbeat == nil {
+		return ""
+	}
+	return a.heartbeat.VNCPassword
 }
 
 // authenticateAgent checks "Authorization: Bearer <agent_id>.<agent_secret>"

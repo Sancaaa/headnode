@@ -285,9 +285,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check the limiter before doing any work: a blocked attempt must be cheap,
-	// and it must be refused even if the password happens to be right.
+	// and it must be refused even if the password happens to be right. begin also
+	// counts this attempt as a failure until it succeeds (D-61), so attempts sent
+	// all at once cannot slip past together.
 	ip := clientIP(r)
-	if wait := s.loginLimit.wait(ip); wait > 0 {
+	if wait := s.loginLimit.begin(ip); wait > 0 {
 		seconds := int((wait + time.Second - 1) / time.Second) // round up
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		writeError(w, http.StatusTooManyRequests,
@@ -295,14 +297,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// bcrypt is slow on purpose, so a flood of logins from many addresses (each with
+	// its free attempts) could keep every CPU busy. Only a few checks run at a time;
+	// the others wait their turn, and give up if it takes too long (D-61).
+	select {
+	case s.passwordChecks <- struct{}{}:
+	case <-r.Context().Done():
+		return
+	case <-time.After(10 * time.Second):
+		writeError(w, http.StatusServiceUnavailable, "the server is busy, try again in a moment")
+		return
+	}
 	u, ok, err := s.checkPassword(req.Username, req.Password)
+	<-s.passwordChecks
 	if err != nil {
 		slog.Error("login", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	if !ok {
-		s.loginLimit.fail(ip)
+		// Already counted by begin.
 		// The username is neither logged nor audited: people sometimes type
 		// their password into that field. The address is enough to spot an attack.
 		slog.Warn("login failed", "ip", ip)

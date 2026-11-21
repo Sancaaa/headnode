@@ -202,8 +202,8 @@ type FileRequest struct {
 	From      string `json:"from,omitempty"`
 	To        string `json:"to,omitempty"`
 	Recursive bool   `json:"recursive,omitempty"`
-	Mode      string `json:"mode,omitempty"` // chmod: octal, for example "0755"
-	Content   string `json:"content"`        // write: the new text of the file
+	Mode      string `json:"mode,omitempty"`    // chmod: octal, for example "0755"
+	Content   string `json:"content"`           // write: the new text of the file
 	Version   string `json:"version,omitempty"` // write: the version that `read` returned
 }
 
@@ -332,6 +332,11 @@ type Heartbeat struct {
 	// VNCControl says that the agent can start and stop the host's VNC server
 	// (a TightVNC service is installed): only then is `vnc_set` worth sending (D-51).
 	VNCControl bool `json:"vnc_control"`
+	// VNCPassword is the password of the VNC server the agent started (D-64): a new
+	// one each time. The server keeps it in memory and gives it only with a screen
+	// tunnel to someone allowed to open one: it is removed from every heartbeat the
+	// server hands out (registry.status). Empty when the VNC server takes none.
+	VNCPassword string `json:"vnc_password,omitempty"`
 }
 
 // TypeVNCSet is server -> agent: start or stop the host's VNC server. There is no

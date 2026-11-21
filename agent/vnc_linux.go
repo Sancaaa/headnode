@@ -102,6 +102,18 @@ func startVNCProcess(plan vncPlan, argv []string, dir string) error {
 			return fmt.Errorf("write the VNC server's config: %w", err)
 		}
 	}
+	if plan.passwordFile != "" {
+		// A new password every time the screen is turned on (D-64). 0600, in the
+		// agent's own 0700 folder: the stored form is only encoded (vncauth.go).
+		password, err := newVNCPassword()
+		if err != nil {
+			return err
+		}
+		os.Remove(plan.passwordFile) // WriteFile keeps the mode of a file that exists
+		if err := os.WriteFile(plan.passwordFile, vncEncryptPassword(password), 0o600); err != nil {
+			return fmt.Errorf("write the VNC server's password: %w", err)
+		}
+	}
 	// What the program says goes to a file: a service has no console, and "nothing
 	// listens on 5900" is not much to go on.
 	logPath := filepath.Join(dir, "vnc.log")
@@ -156,4 +168,22 @@ func stopVNCProcess(argv []string) error {
 		syscall.Kill(pid, syscall.SIGKILL)
 	}
 	return nil
+}
+
+// vncPassword is the password of the VNC server the agent starts, for the heartbeat
+// (D-64), or "" when it takes none (wayvnc) or none was written yet.
+func vncPassword() string {
+	dir, err := vncConfigDir()
+	if err != nil {
+		return ""
+	}
+	plan, ok := linuxVNCEnv().plan(dir)
+	if !ok || plan.passwordFile == "" {
+		return ""
+	}
+	stored, err := os.ReadFile(plan.passwordFile)
+	if err != nil {
+		return ""
+	}
+	return vncDecryptPassword(stored)
 }

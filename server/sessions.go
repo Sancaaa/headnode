@@ -30,7 +30,7 @@ const browserTunnelPort = "5900"
 // its connection and waits, so exactly one goroutine ever copies bytes.
 type session struct {
 	id      string
-	userID  int64 // the one user who may attach a browser
+	userID  int64  // the one user who may attach a browser
 	agentID string // the one agent that may attach
 	kind    string
 	opened  time.Time
@@ -333,9 +333,18 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		reply["readonly"] = readOnly // so the page can hide the buttons that would be refused
 	}
 	if sess.kind == protocol.KindTunnel {
-		detail += " target=" + tunnelTarget
+		detail += " target=" + tunnelTarget // never the VNC password below
+		// A screen tunnel comes with the VNC server's password, which the agent made
+		// when it started the server (D-64), so the viewer logs in by itself. The
+		// person was allowed this tunnel above, so they may see the screen anyway.
+		if _, port, _ := net.SplitHostPort(tunnelTarget); port == browserTunnelPort {
+			if password := s.agents.vncPassword(hostID); password != "" {
+				reply["vnc_password"] = password
+			}
+		}
 	}
 	s.audit(u.ID, hostID, "session_open", detail)
+	w.Header().Set("Cache-Control", "no-store") // it can hold a VNC password
 	writeJSON(w, http.StatusCreated, reply)
 }
 

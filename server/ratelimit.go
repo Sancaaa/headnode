@@ -50,7 +50,27 @@ func penalty(count int) time.Duration {
 func (l *loginLimiter) wait(ip string) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.waitLocked(ip)
+}
 
+// begin is wait and fail in one step, under one lock: if the address may try now,
+// the attempt is counted as a failure at once, before the password is checked, and
+// a successful login undoes it with reset.
+//
+// Checking first and counting after the password check (about 50 ms of bcrypt)
+// would let many attempts sent at the same moment all pass the check before the
+// first one is counted: 500 at once would be 500 guesses, not 4.
+func (l *loginLimiter) begin(ip string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if wait := l.waitLocked(ip); wait > 0 {
+		return wait
+	}
+	l.failLocked(ip)
+	return 0
+}
+
+func (l *loginLimiter) waitLocked(ip string) time.Duration {
 	f, ok := l.byIP[ip]
 	if !ok {
 		return 0
@@ -67,7 +87,10 @@ func (l *loginLimiter) wait(ip string) time.Duration {
 func (l *loginLimiter) fail(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.failLocked(ip)
+}
 
+func (l *loginLimiter) failLocked(ip string) {
 	now := l.now()
 	f := l.byIP[ip]
 	if f == nil || now.Sub(f.last) > forgetAfter {

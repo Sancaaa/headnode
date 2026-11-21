@@ -198,9 +198,7 @@ func readTrayState() trayState {
 		st.notAtBoot = cfg.StartType != mgr.StartAutomatic
 	}
 	if st.running {
-		if text, err := os.ReadFile(statusPath()); err == nil {
-			st.connected = parseStatus(string(text), time.Now())
-		}
+		st.connected = parseStatus(readStatus(), time.Now())
 	}
 	if v, err := openService(vncServiceName, windows.SERVICE_QUERY_STATUS); err == nil {
 		defer v.Close()

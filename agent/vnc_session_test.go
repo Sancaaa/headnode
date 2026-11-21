@@ -76,13 +76,20 @@ func TestPlanUsesX11WhenThereIsNoWayland(t *testing.T) {
 	x11 := t.TempDir()
 	touch(t, filepath.Join(x11, "X0"))
 	env := vncEnv{runDirs: []string{t.TempDir()}, x11Dir: x11, have: haveOnly("x11vnc")}
-	plan, ok := env.plan(t.TempDir())
+	conf := t.TempDir()
+	plan, ok := env.plan(conf)
 	if !ok || plan.name != "x11vnc" {
 		t.Fatalf("plan = %+v, %v; want x11vnc", plan, ok)
 	}
-	want := []string{"-display", ":0", "-localhost", "-nopw", "-rfbport", "5900", "-forever", "-shared", "-auth", "guess"}
+	// A password from a file (D-64), never -nopw, and never the password itself on
+	// the command line.
+	passwords := filepath.Join(conf, "x11vnc.passwd")
+	want := []string{"-display", ":0", "-localhost", "-rfbauth", passwords, "-rfbport", "5900", "-forever", "-shared", "-auth", "guess"}
 	if !reflect.DeepEqual(plan.args, want) {
 		t.Errorf("args = %v, want %v", plan.args, want)
+	}
+	if plan.passwordFile != passwords {
+		t.Errorf("passwordFile = %q, want %q", plan.passwordFile, passwords)
 	}
 }
 

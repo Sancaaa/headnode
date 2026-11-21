@@ -12,3 +12,5 @@ func canControlVNC() bool { return false }
 func setVNCService(enabled bool) error {
 	return errors.New("starting and stopping VNC is only supported on Windows and Linux")
 }
+
+func vncPassword() string { return "" }

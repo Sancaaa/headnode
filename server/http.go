@@ -31,9 +31,11 @@ type Server struct {
 	sessions   *sessionTable  // shells waiting for their two sides, or running
 	transfers  *transferTable // file sends in progress or recently finished (D-03)
 	loginLimit *loginLimiter  // slows down password guessing
-	filesDir   string         // where uploaded files are stored; "" = uploads are off
-	agentDir   string         // where the built agent programs are; "" = /download is off
-	started    time.Time      // when this server started: the page works out the uptime
+	// passwordChecks has room for as many logins as may run bcrypt at once (D-61).
+	passwordChecks chan struct{}
+	filesDir       string    // where uploaded files are stored; "" = uploads are off
+	agentDir       string    // where the built agent programs are; "" = /download is off
+	started        time.Time // when this server started: the page works out the uptime
 
 	// blobMu makes "store a blob and record its row" and "delete a row and maybe
 	// its blob" run one at a time. Without it, a delete could remove a blob in
@@ -49,7 +51,10 @@ func New(db *sql.DB) *Server {
 		sessions:   newSessionTable(sessionPairTimeout),
 		transfers:  newTransferTable(),
 		loginLimit: newLoginLimiter(),
-		started:    time.Now(),
+		// 4: a small VPS has one or two cores, and a person logging in never notices
+		// waiting behind three others for 50 ms each.
+		passwordChecks: make(chan struct{}, 4),
+		started:        time.Now(),
 	}
 }
 

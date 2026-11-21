@@ -106,5 +106,9 @@ func openForDownload(p string) (file *os.File, size int64, name string, err erro
 		file.Close()
 		return nil, 0, "", errNotRegular
 	}
+	if isSecretFile(info) {
+		file.Close()
+		return nil, 0, "", errSecretFile
+	}
 	return file, info.Size(), filepath.Base(abs), nil
 }

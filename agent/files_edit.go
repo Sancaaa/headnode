@@ -54,6 +54,9 @@ func readText(p string) (protocol.FileResponse, error) {
 	if !info.Mode().IsRegular() {
 		return protocol.FileResponse{}, errNotRegular // reading /dev/zero would never end
 	}
+	if isSecretFile(info) {
+		return protocol.FileResponse{}, errSecretFile
+	}
 	if info.Size() > protocol.MaxEditBytes {
 		return protocol.FileResponse{}, errTooBigEdit
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -37,7 +38,9 @@ func canControlVNC() bool {
 //
 // Off means stopped AND set to start only by hand: a stopped service that comes
 // back at the next boot would use the resources again, which is what turning it
-// off is for. On means set to start at boot and started now.
+// off is for. On means set to start at boot and started now, with a new password
+// (D-64). A server that already runs with a password is left alone, so a person
+// already looking at the screen is not thrown out.
 func setVNCService(enabled bool) error {
 	s, err := openService(vncServiceName, vncSwitchRights)
 	if err != nil {
@@ -68,11 +71,75 @@ func setVNCService(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if status.State == svc.Running || status.State == svc.StartPending {
+	running := status.State == svc.Running || status.State == svc.StartPending
+	if running && vncPassword() != "" {
 		return nil
+	}
+	if running {
+		// Running without a password (set up before D-64): TightVNC reads its
+		// password when it starts, so it has to start again.
+		if err := stopAndWait(s); err != nil {
+			return err
+		}
+	}
+	password, err := newVNCPassword()
+	if err != nil {
+		return err
+	}
+	if err := setTightVNCPassword(password); err != nil {
+		return fmt.Errorf("give TightVNC its password: %w", err)
 	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start the VNC service: %w", err)
 	}
 	return nil
+}
+
+// tightVNCKey is where TightVNC, as a service, keeps its settings.
+const tightVNCKey = `SOFTWARE\TightVNC\Server`
+
+// setTightVNCPassword turns VNC authentication on with this password. The key is then
+// made readable by the system and administrators only: everyone may read a new key
+// under HKLM\SOFTWARE, and the stored password is only encoded, not secret (vncauth.go).
+// TightVNC's service runs as LocalSystem, so it can still read it.
+func setTightVNCPassword(password string) error {
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, tightVNCKey, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+	if err := key.SetBinaryValue("Password", vncEncryptPassword(password)); err != nil {
+		return err
+	}
+	if err := key.SetDWordValue("UseVncAuthentication", 1); err != nil {
+		return err
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(`MACHINE\`+tightVNCKey, windows.SE_REGISTRY_KEY,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// vncPassword is TightVNC's current password, for the heartbeat (D-64), or "" if it
+// has none (VNC authentication is off, or TightVNC is not set up).
+func vncPassword() string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, tightVNCKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	if auth, _, err := key.GetIntegerValue("UseVncAuthentication"); err != nil || auth != 1 {
+		return ""
+	}
+	stored, _, err := key.GetBinaryValue("Password")
+	if err != nil {
+		return ""
+	}
+	return vncDecryptPassword(stored)
 }

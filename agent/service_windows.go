@@ -158,6 +158,7 @@ func UninstallService() error {
 	defer m.Disconnect()
 
 	removeTrayAutostart() // the icon's login entry goes with the service (D-57)
+	removeStatus()        // and the connection line it read (D-63)
 	s, err := m.OpenService(serviceName)
 	if err != nil {
 		return nil // not installed: the point is that afterwards it is not there

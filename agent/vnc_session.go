@@ -17,13 +17,16 @@ type vncPlan struct {
 	env        []string // extra environment, KEY=VALUE: where the desktop is
 	config     string   // a file the program reads, or "" for none
 	configText string   // what goes in that file
+	// passwordFile is where the program reads its VNC password from, or "" when it
+	// takes none (D-64). The agent writes a new one each time it starts the program.
+	passwordFile string
 }
 
 // vncEnv is what the machine looks like, as the plan needs to know it. The real
 // values are filled in by vnc_linux.go and tests use their own.
 type vncEnv struct {
-	runDirs []string        // runtime folders to look for a Wayland socket in
-	x11Dir  string          // the folder of X11 sockets (/tmp/.X11-unix)
+	runDirs []string          // runtime folders to look for a Wayland socket in
+	x11Dir  string            // the folder of X11 sockets (/tmp/.X11-unix)
 	have    func(string) bool // whether a program is installed
 }
 
@@ -56,7 +59,9 @@ func findX11Display(dir string) (string, bool) {
 // plan picks the VNC server for the desktop that is running, and says how to start
 // it so that it listens on this machine only (127.0.0.1:5900), with no login of its
 // own (D-54): the agent's tunnel is the only way in, and headnode's login and roles
-// are the gate. confDir is where its config file would go.
+// are the gate. x11vnc also gets a password the agent makes (D-64), so that other
+// programs and users on this machine cannot use that way in. confDir is where its
+// config and password files would go.
 //
 // A Wayland desktop (the Raspberry Pi 5 default) is served by wayvnc and nothing
 // else. An X11 server may be there too, as XWayland does for old programs, but
@@ -70,16 +75,20 @@ func (e vncEnv) plan(confDir string) (vncPlan, bool) {
 		return vncPlan{
 			name: "wayvnc",
 			// -C: this config, not the machine's (Raspberry Pi OS turns logins on there).
-			args: []string{"-C", conf, "127.0.0.1", "5900"},
-			env:  []string{"XDG_RUNTIME_DIR=" + dir, "WAYLAND_DISPLAY=" + name},
+			args:       []string{"-C", conf, "127.0.0.1", "5900"},
+			env:        []string{"XDG_RUNTIME_DIR=" + dir, "WAYLAND_DISPLAY=" + name},
 			config:     conf,
 			configText: "address=127.0.0.1\nport=5900\nenable_auth=false\n",
 		}, true
 	}
 	if display, ok := findX11Display(e.x11Dir); ok && e.have("x11vnc") {
+		// -rfbauth: the password is in a file only the agent's account may read, never
+		// on the command line, which every user of the machine can see.
+		passwords := filepath.Join(confDir, "x11vnc.passwd")
 		return vncPlan{
-			name: "x11vnc",
-			args: []string{"-display", display, "-localhost", "-nopw", "-rfbport", "5900", "-forever", "-shared", "-auth", "guess"},
+			name:         "x11vnc",
+			args:         []string{"-display", display, "-localhost", "-rfbauth", passwords, "-rfbport", "5900", "-forever", "-shared", "-auth", "guess"},
+			passwordFile: passwords,
 		}, true
 	}
 	return vncPlan{}, false

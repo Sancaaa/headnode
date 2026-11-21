@@ -1023,7 +1023,18 @@ async function mountScreen(host, box, status, cad, toggle, power) {
     rfb.addEventListener('desktopname', (event) => {
       status.textContent = 'Connected: ' + plain(event.detail.name); // text from the host: shown as text
     });
+    // The VNC server's password is made by the agent each time VNC is started, and the
+    // server hands it only to someone allowed to open this screen (D-64). It is tried
+    // once by itself; if it is refused (VNC was restarted a moment ago, say), the
+    // person is asked, as for a VNC server headnode does not manage.
+    let givenPassword = result.data.vnc_password || '';
     rfb.addEventListener('credentialsrequired', async () => {
+      if (givenPassword) {
+        const password = givenPassword;
+        givenPassword = '';
+        rfb.sendCredentials({ password });
+        return;
+      }
       const password = await askVncPassword(host.name);
       if (disposed || !rfb) return;
       if (password === null) {

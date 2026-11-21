@@ -24,4 +24,6 @@ sudo raspi-config nonint do_vnc 1
 - **No Start VNC button:** the host must be online, the agent 0.9.0 or newer (run the install command again to update it), and a desktop must be running with wayvnc or x11vnc installed.
 - **Start VNC does nothing, or the VNC button never appears:** the program's output is in `~/.config/headnode/vnc.log` for the user the agent runs as (`ps -o user= -C headnode-agent`). The agent's own log is `journalctl -u headnode-agent`.
 - **A black or empty screen:** on a Pi, check that the desktop is Wayland with labwc (`echo $XDG_SESSION_TYPE`), and that nobody else is already sharing it.
-- The browser viewer connects without a login (the agent's tunnel and your headnode role are the gate), so it must not be possible to reach port 5900 from the network: wayvnc and x11vnc are started to listen on `127.0.0.1` only.
+- wayvnc and x11vnc listen on `127.0.0.1` only, so port 5900 cannot be reached from the network.
+- **x11vnc** gets a new random password each time Start VNC is pressed, in `~/.config/headnode/x11vnc.passwd` (readable by the agent's user only), and the dashboard logs in with it by itself (D-64). Other users and programs on the machine cannot take over the screen.
+- **wayvnc** still has no password: its login needs a key and certificate set up that the browser viewer cannot use. While it is on, any program on the machine can connect to `127.0.0.1:5900`. On a machine that other people log in to, turn the screen off when you are done (Stop VNC).

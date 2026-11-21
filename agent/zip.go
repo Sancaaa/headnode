@@ -188,6 +188,10 @@ func writeZip(ctx context.Context, w io.Writer, root string) error {
 // reported through skip). One that fails while it is being read is an error: the
 // entry is already half written, so the archive cannot go on.
 func addFile(zw *zip.Writer, path, name string, info fs.FileInfo, skip func(error)) error {
+	if isSecretFile(info) { // a zipped /etc/headnode must not carry it out either (D-62)
+		skip(errSecretFile)
+		return nil
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		skip(err)

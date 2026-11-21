@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -93,5 +94,45 @@ func TestLoginLimiterForgetsOldFailures(t *testing.T) {
 	l.fail(ip)
 	if got := l.wait(ip); got != 0 {
 		t.Errorf("first failure after the reset: wait = %v, want 0", got)
+	}
+}
+
+// TestLoginLimiterCountsAttemptsSentAtOnce is the race D-61 fixed: attempts that
+// arrive together must not all pass before the first one is counted.
+func TestLoginLimiterCountsAttemptsSentAtOnce(t *testing.T) {
+	l := newLoginLimiter()
+	const ip = "203.0.113.5"
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	allowed := 0
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.begin(ip) == 0 {
+				mu.Lock()
+				allowed++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	// The free ones, plus the one whose failure starts the penalty (like a 4th
+	// wrong password typed by hand).
+	if allowed != freeAttempts+1 {
+		t.Errorf("%d of 200 attempts at once were let through, want %d", allowed, freeAttempts+1)
+	}
+}
+
+func TestLoginLimiterBeginThenResetForgets(t *testing.T) {
+	l := newLoginLimiter()
+	const ip = "203.0.113.5"
+	for i := 0; i < freeAttempts; i++ {
+		l.begin(ip)
+	}
+	l.reset(ip) // the last one was the right password
+	if got := l.begin(ip); got != 0 {
+		t.Errorf("after a successful login: wait = %v, want 0", got)
 	}
 }
