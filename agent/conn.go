@@ -22,10 +22,11 @@ import (
 // a folder sent to the host (`fetch` with extract), and 0.7.0 the Windows agent
 // (system info and the Windows service), and 0.8.0 the "vnc" flag in the
 // heartbeat (D-50) and starting and stopping the VNC server (D-51), and 0.9.0
-// the same for a Linux desktop (D-54): an older agent ignores the command, stays silent or answers
+// the same for a Linux desktop (D-54), and 0.9.1 the tray icon's safer service
+// permissions (D-58): an older agent ignores the command, stays silent or answers
 // "unknown operation", so the version is how a person can tell whether a host is
 // up to date.
-const Version = "0.9.0"
+const Version = "0.9.1"
 
 const (
 	heartbeatInterval = 20 * time.Second
