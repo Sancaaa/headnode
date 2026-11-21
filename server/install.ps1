@@ -253,8 +253,9 @@ if ($NoVnc) {
 
 # --- the tray icon (M9, D-57): lets the person at this computer turn headnode off and
 # on, like Tailscale. Two things: the person (whoever runs this script) is given the
-# right to start and stop the services, and the icon is started now and at every
-# login. A failure here costs only the icon: the agent is already running.
+# right to start the agent's service and send it the icon's requests (never to
+# reconfigure a service, D-58), and the icon is started now and at every login. A
+# failure here costs only the icon: the agent is already running.
 if ($NoTray) {
     Write-Host 'Skipping the tray icon (-NoTray).'
 } else {

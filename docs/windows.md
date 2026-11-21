@@ -40,15 +40,15 @@ The install command also puts a **headnode icon** in the tray (the area by the c
 
 - **Green:** headnode is connected to the server. **Grey:** it is off, stopped, or cannot reach the server. Hover the icon for the words.
 - **Turn headnode off** stops headnode on this computer **and** keeps it from starting at boot, so nothing of headnode runs and the host goes *offline* in the dashboard within a minute. **Turn headnode on** reverses all of it.
-- **Start VNC / Stop VNC** (when TightVNC is installed) does what the dashboard's button does, from here.
+- **Start VNC / Stop VNC** (when TightVNC is installed, and only while headnode is on) does what the dashboard's button does, from here: the icon asks the agent, and the agent switches TightVNC.
 - **Quit** closes only the icon. headnode keeps running, or stays off, as it was. The icon is not headnode.
 
-Only the account that ran the install command may use the icon's switch (the service's permissions name that one account); other people logged in on the same computer cannot turn headnode off. `-NoTray` at the end of the install command skips the icon and the permissions. Running the install command again also turns headnode on again.
+Only the account that ran the install command may use the icon's switch (the service's permissions name that one account); other people logged in on the same computer cannot turn headnode off. That account may start the `headnode-agent` service and send it the icon's requests, nothing more: it may not reconfigure any service, because a person who can change a service's program can run anything as the system (D-58). `-NoTray` at the end of the install command skips the icon and the permissions. Running the install command again also turns headnode on again.
 
 To check by hand that headnode is really off (PowerShell):
 
 ```powershell
-Get-Service headnode-agent | Select-Object Status, StartType   # Stopped, Disabled
+Get-Service headnode-agent | Select-Object Status, StartType   # Stopped, Manual
 Get-Process headnode-agent -ErrorAction SilentlyContinue        # prints nothing (the icon itself is also headnode-agent.exe: it only shows the state)
 Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue   # prints nothing if VNC is off too
 ```

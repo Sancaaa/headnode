@@ -15,15 +15,16 @@ import (
 
 // trayView turns what is known about the agent service into the line the menu shows,
 // whether the icon is green, and the label of the on/off item. "Off" means the
-// service is stopped AND set not to start at boot (disabled): that is what Turn
-// headnode off does, and nothing of headnode runs then (D-57).
-func trayView(running, disabled, connected bool) (status string, green bool, toggle string) {
+// service is stopped AND not set to start at boot (manual, or disabled by an
+// administrator): that is what Turn headnode off does, and nothing of headnode runs
+// then (D-57, D-58).
+func trayView(running, notAtBoot, connected bool) (status string, green bool, toggle string) {
 	switch {
 	case running && connected:
 		return "Connected to the headnode server", true, "Turn headnode off"
 	case running:
 		return "Running, not connected to the server", false, "Turn headnode off"
-	case disabled:
+	case notAtBoot:
 		return "Off", false, "Turn headnode on"
 	default:
 		return "Stopped", false, "Turn headnode on"
@@ -64,12 +65,24 @@ func parseStatus(text string, now time.Time) bool {
 
 // -------------------------------------------------------------- who may switch the service
 
-// defaultServiceDACL is who may do what with a Windows service when nothing else is
-// said (the system and administrators: everything; every logged-in user: look).
-// SDDL letters: CC query config, DC change config, LC query status, SW list
-// dependents, RP start, WP stop, DT pause, LO interrogate, CR user control, SD delete,
-// RC read permissions, WD change permissions, WO take ownership.
-const defaultServiceDACL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+// windowsDefaultServiceDACL is who may do what with a Windows service when nothing
+// else is said (the system and administrators: everything; every logged-in user: look,
+// and send control codes). SDDL letters: CC query config, DC change config, LC query
+// status, SW list dependents, RP start, WP stop, DT pause, LO interrogate, CR user
+// control, SD delete, RC read permissions, WD change permissions, WO take ownership.
+const windowsDefaultServiceDACL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+
+// agentServiceDACL is the Windows default without CR for everyone at the console: a
+// control code to the agent turns headnode off or the screen on (D-58), so only the
+// account that `service allow` names, and administrators, may send one.
+const agentServiceDACL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLORC;;;IU)(A;;CCLCSWLORC;;;SU)"
+
+// trayUserRights is what the icon's user may do with the agent's service: look at it,
+// start it, and send it the icon's control codes. Never DC (change config): with it,
+// a user can point the service at any program, which then runs as LocalSystem (D-58).
+// Never WP, SD, WD or WO either: turning off goes through a control code, and the
+// user may not delete the service or change who may use it.
+const trayUserRights = "CCLCRPLOCRRC"
 
 var sidRe = regexp.MustCompile(`^S-1-[0-9]+(-[0-9]+)+$`)
 
@@ -77,9 +90,9 @@ var sidRe = regexp.MustCompile(`^S-1-[0-9]+(-[0-9]+)+$`)
 // is checked before the text goes into a permission string.
 func validSID(text string) bool { return sidRe.MatchString(text) }
 
-// serviceSDDL is the default permissions plus one more rule: this one user may query
-// the service, start it, stop it and change how it starts, and nothing more. It is
-// how a person at the machine can switch headnode without administrator rights.
+// serviceSDDL is the agent's base permissions plus one more rule, for this one user
+// (trayUserRights). It is how a person at the machine can switch headnode without
+// administrator rights.
 func serviceSDDL(sid string) string {
-	return defaultServiceDACL + "(A;;CCDCLCRPWPLORC;;;" + sid + ")"
+	return agentServiceDACL + "(A;;" + trayUserRights + ";;;" + sid + ")"
 }

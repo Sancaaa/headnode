@@ -9,7 +9,7 @@ import (
 
 func TestTrayView(t *testing.T) {
 	tests := []struct {
-		running, disabled, connected bool
+		running, notAtBoot, connected bool
 		status                       string
 		green                        bool
 		toggle                       string
@@ -22,10 +22,10 @@ func TestTrayView(t *testing.T) {
 		{false, true, true, "Off", false, "Turn headnode on"},
 	}
 	for _, tc := range tests {
-		status, green, toggle := trayView(tc.running, tc.disabled, tc.connected)
+		status, green, toggle := trayView(tc.running, tc.notAtBoot, tc.connected)
 		if status != tc.status || green != tc.green || toggle != tc.toggle {
 			t.Errorf("trayView(%v,%v,%v) = %q,%v,%q; want %q,%v,%q",
-				tc.running, tc.disabled, tc.connected, status, green, toggle, tc.status, tc.green, tc.toggle)
+				tc.running, tc.notAtBoot, tc.connected, status, green, toggle, tc.status, tc.green, tc.toggle)
 		}
 	}
 }
@@ -58,14 +58,42 @@ func TestServiceSDDL(t *testing.T) {
 		}
 	}
 	got := serviceSDDL("S-1-5-21-1-2-3-1001")
-	if !strings.HasPrefix(got, defaultServiceDACL) || !strings.HasSuffix(got, "(A;;CCDCLCRPWPLORC;;;S-1-5-21-1-2-3-1001)") {
+	if !strings.HasPrefix(got, agentServiceDACL) || !strings.HasSuffix(got, "(A;;CCLCRPLOCRRC;;;S-1-5-21-1-2-3-1001)") {
 		t.Errorf("serviceSDDL = %q", got)
 	}
-	// The user may start, stop and change how it starts: never delete it or change its permissions.
-	rule := got[len(defaultServiceDACL):]
-	for _, forbidden := range []string{"SD", "WD", "WO"} {
-		if strings.Contains(rule[:strings.Index(rule, ";;;")], forbidden) {
-			t.Errorf("the user's rule %q contains %s", rule, forbidden)
+	// D-58: DC (change config) would let the user point the service at any program,
+	// which then runs as LocalSystem. Delete, change permissions and take ownership are
+	// out too, and stop: turning off goes through a control code.
+	assertNoRights(t, "the user's rule", trayUserRights, "DC", "SD", "WD", "WO", "WP")
+}
+
+// TestAgentServiceDACL checks that nobody but the system and administrators may
+// reconfigure the agent's service, and that everyone at the console may only look:
+// a control code (CR) turns headnode off or the screen on, so it is not for everyone.
+func TestAgentServiceDACL(t *testing.T) {
+	for _, ace := range strings.Split(strings.TrimPrefix(agentServiceDACL, "D:("), ")(") {
+		ace = strings.TrimSuffix(ace, ")")
+		parts := strings.Split(ace, ";")
+		rights, who := parts[2], parts[5]
+		if who == "SY" || who == "BA" {
+			continue
+		}
+		assertNoRights(t, "the rule for "+who, rights, "DC", "CR", "RP", "WP", "SD", "WD", "WO")
+	}
+}
+
+// assertNoRights fails if an SDDL rights string holds any of the two-letter rights.
+// The string is read two letters at a time, so "LOCR" holds LO and CR but not OC.
+func assertNoRights(t *testing.T, what, rights string, forbidden ...string) {
+	t.Helper()
+	if len(rights)%2 != 0 {
+		t.Fatalf("%s: %q is not a list of two-letter rights", what, rights)
+	}
+	for i := 0; i < len(rights); i += 2 {
+		for _, f := range forbidden {
+			if rights[i:i+2] == f {
+				t.Errorf("%s has the right %s (%q)", what, f, rights)
+			}
 		}
 	}
 }

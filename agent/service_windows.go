@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+
+	"headnode/protocol"
 )
 
 // The agent as a Windows service (D-47): the counterpart of the systemd unit in
@@ -134,6 +136,12 @@ func InstallService(configPath, runUser string) error {
 	}, 24*3600); err != nil {
 		slog.Warn("could not set the service's restart-on-failure actions", "err", err)
 	}
+	// Who may use the service starts from the base every time: an older version gave
+	// the icon's user the right to reconfigure it, which is a way to run any program as
+	// LocalSystem (D-58). install.ps1 runs `service allow` after this to add the user.
+	if err := resetServicePermissions(); err != nil {
+		return err
+	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start the service: %w", err)
 	}
@@ -173,9 +181,15 @@ func stopAndWait(s *mgr.Service) error {
 	if _, err := s.Control(svc.Stop); err != nil {
 		return fmt.Errorf("stop the service: %w", err)
 	}
+	return waitStopped(s)
+}
+
+// waitStopped waits until a service that was asked to stop has stopped.
+func waitStopped(s *mgr.Service) error {
 	deadline := time.Now().Add(stopTimeout)
 	for time.Now().Before(deadline) {
-		if status, err = s.Query(); err != nil {
+		status, err := s.Query()
+		if err != nil {
 			return err
 		}
 		if status.State == svc.Stopped {
@@ -199,6 +213,10 @@ type serviceHandler struct{ cfg Config }
 
 // Execute is called by the service manager. The agent runs until the manager
 // says stop (or the machine shuts down), or until it fails for good.
+//
+// args is ignored on purpose: whoever may start the service (the tray icon's user)
+// can pass any arguments with the start request, so they must never change what the
+// agent does.
 func (h *serviceHandler) Execute(args []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const accepts = svc.AcceptStop | svc.AcceptShutdown
 
@@ -209,6 +227,22 @@ func (h *serviceHandler) Execute(args []string, requests <-chan svc.ChangeReques
 	go func() { finished <- Run(ctx, h.cfg) }()
 	changes <- svc.Status{State: svc.Running, Accepts: accepts}
 
+	// Started means on: at boot it already is, and after the icon's Turn headnode on
+	// (which can start the service but not reconfigure it, D-58) this is what makes the
+	// next boot start it again.
+	if err := setStartType(serviceName, mgr.StartAutomatic); err != nil {
+		slog.Warn("could not set the service to start at boot", "err", err)
+	}
+
+	stop := func() {
+		changes <- svc.Status{State: svc.StopPending}
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(10 * time.Second): // do not hang the shutdown on a stuck connection
+		}
+	}
+
 	for {
 		select {
 		case req := <-requests:
@@ -216,13 +250,23 @@ func (h *serviceHandler) Execute(args []string, requests <-chan svc.ChangeReques
 			case svc.Interrogate:
 				changes <- req.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				changes <- svc.Status{State: svc.StopPending}
-				cancel()
-				select {
-				case <-finished:
-				case <-time.After(10 * time.Second): // do not hang the shutdown on a stuck connection
-				}
+				stop()
 				return false, 0
+			case ctlTurnOff:
+				// The icon's Turn headnode off: not at boot any more, then stop. If the
+				// first part fails, stopping is still what the person asked for; the icon
+				// then says "Stopped", not "Off", so the difference is visible.
+				if err := setStartType(serviceName, mgr.StartManual); err != nil {
+					slog.Error("could not set the service to start by hand", "err", err)
+				}
+				slog.Info("turned off from the tray icon")
+				stop()
+				return false, 0
+			case ctlVNCOn, ctlVNCOff:
+				// The icon's Start VNC / Stop VNC, done here, as LocalSystem, so the icon's
+				// user needs no rights on TightVNC's service. Not on this goroutine: it can
+				// take seconds. The dashboard sees the change in a later heartbeat.
+				go runVNCSet(protocol.VNCSet{Enabled: req.Cmd == ctlVNCOn}, func() {})
 			}
 		case err := <-finished:
 			// Run only returns on its own for an error retrying cannot fix. Exit

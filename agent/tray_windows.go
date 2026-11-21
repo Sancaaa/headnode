@@ -17,12 +17,14 @@ import (
 
 // The tray icon of a Windows host (M9, D-57): `headnode-agent tray`. A person at the
 // machine can see whether headnode is connected, and turn it off and on, without a
-// command and without administrator rights. It runs in the person's own session and
-// controls the agent's service, which is allowed to them by `service allow`.
+// command and without administrator rights. It runs in the person's own session. It
+// may start the agent's service and send it control codes, which `service allow`
+// permits that one person; it may not reconfigure any service (D-58): the agent, as
+// LocalSystem, does that when it is asked.
 //
-// "Off" really is off: the service is stopped and set not to start at boot, so nothing
-// of headnode runs until it is turned on. The icon is not headnode: closing it (Quit)
-// changes nothing about the service.
+// "Off" really is off: the service is stopped and set to start only by hand, so
+// nothing of headnode runs until it is turned on. The icon is not headnode: closing it
+// (Quit) changes nothing about the service.
 
 const trayRunValue = "headnode-tray" // the name of the login entry, in install.ps1 too
 
@@ -78,7 +80,7 @@ func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte
 	)
 	refresh := func() {
 		st := readTrayState()
-		line, isGreen, toggleLabel := trayView(st.running, st.disabled, st.connected)
+		line, isGreen, toggleLabel := trayView(st.running, st.notAtBoot, st.connected)
 		if st.err != nil {
 			line, isGreen = st.err.Error(), false
 		}
@@ -97,7 +99,9 @@ func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte
 			}
 			shownGreen = &isGreen
 		}
-		if st.vncKnown {
+		// The agent switches the screen for the icon, so with headnode off there is
+		// nobody to ask (and nothing to reach the screen through anyway).
+		if st.vncKnown && st.running {
 			screen.Show()
 			if st.vncRunning {
 				screen.SetTitle("Stop VNC")
@@ -124,14 +128,14 @@ func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte
 			st := readTrayState()
 			toggle.SetTitle("Working…")
 			toggle.Disable()
-			if err := switchAgent(!(st.running && !st.disabled)); err != nil {
+			if err := switchAgent(!st.running); err != nil {
 				fail("Could not switch headnode", err)
 			}
 			refresh()
 		case <-screen.ClickedCh:
 			st := readTrayState()
 			screen.Disable()
-			if err := setVNCService(!st.vncRunning); err != nil { // the same code the dashboard's button runs
+			if err := askAgentVNC(!st.vncRunning); err != nil {
 				fail("Could not switch VNC", err)
 			}
 			screen.Enable()
@@ -145,7 +149,7 @@ func trayLoop(status, toggle, screen, quit *systray.MenuItem, green, grey []byte
 
 // trayState is what the icon knows about this machine.
 type trayState struct {
-	running, disabled, connected bool
+	running, notAtBoot, connected bool
 	vncKnown, vncRunning         bool  // TightVNC is installed, and running
 	err                          error // headnode itself cannot be looked at
 }
@@ -170,7 +174,7 @@ func readTrayState() trayState {
 		st.running = status.State == svc.Running || status.State == svc.StartPending
 	}
 	if cfg, err := s.Config(); err == nil {
-		st.disabled = cfg.StartType == mgr.StartDisabled
+		st.notAtBoot = cfg.StartType != mgr.StartAutomatic
 	}
 	if st.running {
 		if text, err := os.ReadFile(statusPath()); err == nil {
@@ -187,41 +191,55 @@ func readTrayState() trayState {
 	return st
 }
 
-// switchAgent turns headnode on or off for good. Off is stopped AND disabled, so a
-// reboot does not bring it back, and nothing of headnode runs; on is set to start at
-// boot and started. The order matters for off: disabled first, so even a stop that
-// fails leaves it from coming back.
+// switchAgent turns headnode on or off for good. Off is stopped AND set to start by
+// hand, so a reboot does not bring it back, and nothing of headnode runs; on is
+// started, and the agent then sets itself to start at boot (service_windows.go). The
+// icon changes no configuration itself (D-58): for off it asks the agent with a
+// control code, and the agent sets its start type and stops.
 func switchAgent(on bool) error {
-	s, err := openService(serviceName, serviceSwitchRights)
+	s, err := openService(serviceName, trayServiceRights)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 
-	cfg, err := s.Config()
-	if err != nil {
-		return fmt.Errorf("read the service: %w", err)
-	}
-	if on {
-		cfg.StartType = mgr.StartAutomatic
-	} else {
-		cfg.StartType = mgr.StartDisabled
-	}
-	if err := s.UpdateConfig(cfg); err != nil {
-		return fmt.Errorf("change the service: %w", err)
-	}
-
-	if !on {
-		return stopAndWait(s) // from service_windows.go
-	}
 	status, err := s.Query()
 	if err != nil {
 		return err
 	}
-	if status.State == svc.Running || status.State == svc.StartPending {
+	running := status.State == svc.Running || status.State == svc.StartPending
+	if on {
+		if running {
+			return nil
+		}
+		return s.Start()
+	}
+	if !running {
 		return nil
 	}
-	return s.Start()
+	if _, err := s.Control(ctlTurnOff); err != nil {
+		return fmt.Errorf("ask headnode to turn off: %w", err)
+	}
+	return waitStopped(s) // from service_windows.go
+}
+
+// askAgentVNC asks the agent to start or stop TightVNC, the same thing the
+// dashboard's Start VNC / Stop VNC does. The agent runs as LocalSystem and may switch
+// TightVNC's service; the icon's user may not, and needs not (D-58).
+func askAgentVNC(on bool) error {
+	s, err := openService(serviceName, trayServiceRights)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	code := ctlVNCOff
+	if on {
+		code = ctlVNCOn
+	}
+	if _, err := s.Control(code); err != nil {
+		return fmt.Errorf("ask headnode to switch VNC: %w", err)
+	}
+	return nil
 }
 
 // removeTrayAutostart deletes the login entry that install.ps1 made for the person
