@@ -95,6 +95,28 @@ func assertNoRights(t *testing.T, what, rights string, forbidden ...string) {
 	}
 }
 
+func TestUpdateArguments(t *testing.T) {
+	got, ok := updateArguments("https://headnode.example.com")
+	want := `-NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://headnode.example.com/install.ps1))); Read-Host 'Press Enter to close'"`
+	if !ok || got != want {
+		t.Errorf("updateArguments = %q, %v; want %q", got, ok, want)
+	}
+	if _, ok := updateArguments("https://10.0.0.5:8443"); !ok {
+		t.Error("a host with a port was refused")
+	}
+	// Anything that could end the quoted address and add a command of its own.
+	for _, bad := range []string{
+		"", "http://headnode.example.com", "headnode.example.com",
+		`https://x.com"; calc; "`, "https://x.com;calc", "https://x.com'", "https://x.com/path",
+		"https://x.com`calc", "https://x.com$(calc)", "https://user@x.com", "https://x.com:99999999",
+		"https://x.com\n", "https:// x.com", "https://x.com#", "https://-", "https://.com",
+	} {
+		if _, ok := updateArguments(bad); ok {
+			t.Errorf("updateArguments(%q) was accepted: it could change the command", bad)
+		}
+	}
+}
+
 func TestTrayIconIsAValidIcon(t *testing.T) {
 	ico := trayIcon(0x2e, 0x9e, 0x5b)
 	if binary.LittleEndian.Uint16(ico[2:]) != 1 || binary.LittleEndian.Uint16(ico[4:]) != 3 {

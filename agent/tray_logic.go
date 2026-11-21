@@ -60,6 +60,28 @@ func parseStatus(text string, now time.Time) bool {
 	return now.Sub(time.Unix(at, 0)) <= statusStaleAfter
 }
 
+// ------------------------------------------------------------------- the update command
+
+// updateServerRe is the only shape of server address that goes into the update command:
+// https, a host name or an address, an optional port, nothing else (M10, D-66). The
+// address comes from the registry, where only an administrator or the system writes it,
+// and is checked anyway: it ends up inside a PowerShell command that an administrator
+// approves, so a quote or a semicolon in it would run somebody else's code.
+var updateServerRe = regexp.MustCompile(`^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
+
+// updateArguments are the arguments of the elevated PowerShell that updates the agent:
+// it downloads install.ps1 from the server itself (nothing is run from a folder a
+// normal user can write to) and runs it without a token, which updates an enrolled
+// host. The window stays open until Enter, so its output can be read. ok is false when
+// the address is not one that may go into the command.
+func updateArguments(server string) (arguments string, ok bool) {
+	if !updateServerRe.MatchString(server) {
+		return "", false
+	}
+	return `-NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm ` + server +
+		`/install.ps1))); Read-Host 'Press Enter to close'"`, true
+}
+
 // -------------------------------------------------------------- who may switch the service
 
 // windowsDefaultServiceDACL is who may do what with a Windows service when nothing

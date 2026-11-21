@@ -84,14 +84,17 @@ func trayReady(blue, grey []byte) {
 	systray.AddSeparator()
 	screen := systray.AddMenuItem("Start VNC", "Share this computer's screen with headnode")
 	screen.Hide() // until we know that TightVNC is installed
+	// On every version: the icon does not know whether an update exists, the dashboard does
+	// (M10, D-66). Windows hosts have no Shell tab, so this is how an update is started there.
+	update := systray.AddMenuItem("Update headnode…", "Install the newest headnode agent on this computer (asks for an administrator)")
 	systray.AddSeparator()
 	exit := systray.AddMenuItem("Exit", "Turn headnode off and close this icon. Open headnode from the Start menu to bring it back.")
 
-	go trayLoop(status, screen, exit, blue, grey)
+	go trayLoop(status, screen, update, exit, blue, grey)
 }
 
 // trayLoop keeps the icon up to date and does what the menu asks, one thing at a time.
-func trayLoop(status, screen, exit *systray.MenuItem, blue, grey []byte) {
+func trayLoop(status, screen, update, exit *systray.MenuItem, blue, grey []byte) {
 	var (
 		problem      string // the last action's error, shown for a while
 		problemUntil time.Time
@@ -149,6 +152,14 @@ func trayLoop(status, screen, exit *systray.MenuItem, blue, grey []byte) {
 			}
 			screen.Enable()
 			refresh()
+		case <-update.ClickedCh:
+			// An administrator's PowerShell, behind the system's own prompt. If the person
+			// cancels it, nothing happens. If they accept, the installer replaces the
+			// program and starts a new icon, and this one is closed by it (D-66).
+			if err := runUpdate(); err != nil {
+				fail("Could not start the update", err)
+				refresh()
+			}
 		case <-exit.ClickedCh:
 			// Exit: headnode off completely, then the icon goes. If turning it off fails the
 			// icon stays and says why: closing it would leave headnode running with no
@@ -259,6 +270,34 @@ func askAgentVNC(on bool) error {
 		return fmt.Errorf("ask headnode to switch VNC: %w", err)
 	}
 	return nil
+}
+
+// runUpdate opens a PowerShell as an administrator (the system shows its own prompt, and
+// nothing runs without the person's consent) that downloads install.ps1 from this host's
+// server and runs it, which updates the agent (M10, D-66). The icon gains no right by it:
+// whoever accepts the prompt is an administrator.
+func runUpdate() error {
+	arguments, ok := updateArguments(readServer())
+	if !ok {
+		return errors.New("the server's address is not known yet: wait a few seconds after headnode connects, and try again")
+	}
+	verb, err := windows.UTF16PtrFromString("runas")
+	if err != nil {
+		return err
+	}
+	file, err := windows.UTF16PtrFromString("powershell.exe")
+	if err != nil {
+		return err
+	}
+	args, err := windows.UTF16PtrFromString(arguments)
+	if err != nil {
+		return err
+	}
+	err = windows.ShellExecute(0, verb, file, args, nil, windows.SW_SHOWNORMAL)
+	if errors.Is(err, windows.ERROR_CANCELLED) {
+		return nil // the person said no at the prompt
+	}
+	return err
 }
 
 // removeTrayAutostart deletes the login entry and the Start menu entry that install.ps1

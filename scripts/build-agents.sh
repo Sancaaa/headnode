@@ -22,3 +22,11 @@ done
 target="$out/headnode-agent-windows-amd64.exe"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$target" ./cmd/headnode-agent
 echo "built $target"
+
+# The version of what was just built, for the dashboard's "update available" (D-66):
+# the Version constant of the agent package. Written last, so a failed build leaves
+# the old version in place.
+version=$(sed -n 's/^const Version = "\([0-9.]*\)"$/\1/p' agent/conn.go)
+[ -n "$version" ] || { echo "could not read the agent version from agent/conn.go" >&2; exit 1; }
+printf '%s' "$version" > "$out/VERSION"
+echo "agent version $version"

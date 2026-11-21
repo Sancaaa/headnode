@@ -118,6 +118,12 @@ h2 { font-size: 18px; font-weight: 600; margin: 40px 0 8px; }
   font-size: 12px; font-weight: 500;
   border-radius: var(--radius-xs); padding: 1px 4px; margin-right: 4px;
 }
+/* "Update available" on a host row: a tag that is a button (M10, D-66) */
+button.tag-update {
+  border: 0; font-family: inherit; cursor: pointer;
+  background: var(--accent); color: var(--on-accent);
+}
+button.tag-update:hover { opacity: 0.9; }
 .sub { color: var(--text-muted); }
 .num { font-variant-numeric: tabular-nums; }
 .mono { font-family: var(--mono); font-size: 13px; }

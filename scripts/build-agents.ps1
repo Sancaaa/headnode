@@ -31,6 +31,15 @@ try {
     go build -trimpath -ldflags "-s -w" -o $target ./cmd/headnode-agent
     if ($LASTEXITCODE -ne 0) { throw "go build failed for windows/amd64" }
     Write-Host ("built {0} ({1:N1} MB)" -f $target, ((Get-Item $target).Length / 1MB))
+
+    # The version of what was just built, for the dashboard's "update available" (D-66):
+    # it is the Version constant of the agent package. Written last, so a failed build
+    # leaves the old version in place.
+    $match = Select-String -Path "agent/conn.go" -Pattern '^const Version = "([0-9.]+)"'
+    if (-not $match) { throw "could not read the agent version from agent/conn.go" }
+    $version = $match.Matches[0].Groups[1].Value
+    Set-Content -Path (Join-Path $Out "VERSION") -Value $version -NoNewline -Encoding ascii
+    Write-Host "agent version $version"
 }
 finally {
     # Do not leave the next `go build` in this window cross-compiling by accident.

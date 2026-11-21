@@ -44,6 +44,33 @@ func readStatus() string {
 	return text
 }
 
+// writeServer records the address of the server this agent belongs to, in the same key
+// (M10, D-66): the tray icon's Update headnode… needs it to build the update command,
+// and the credentials file that holds it is private. Written by the agent, as the
+// system, so (D-63) only an administrator could have put anything else there.
+func writeServer(server string) {
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, statusKey, registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer key.Close()
+	key.SetStringValue("Server", server)
+}
+
+// readServer returns what writeServer last wrote, or "" if nothing was.
+func readServer() string {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, statusKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	text, _, err := key.GetStringValue("Server")
+	if err != nil {
+		return ""
+	}
+	return text
+}
+
 // removeStatus deletes the key, for `service uninstall`. Nothing else is kept in it.
 func removeStatus() {
 	registry.DeleteKey(registry.LOCAL_MACHINE, statusKey)

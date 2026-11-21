@@ -22,7 +22,12 @@ type host struct {
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
 	Version  string `json:"version"`
-	Online   bool   `json:"online"`
+	// Whether the agents folder holds a newer agent than this host runs (M10, D-66),
+	// and which version that is. The dashboard says "update available"; the update
+	// itself is run by hand on the host.
+	UpdateAvailable bool   `json:"update_available"`
+	LatestVersion   string `json:"latest_version,omitempty"`
+	Online          bool   `json:"online"`
 	// The address the server saw the agent's control connection come from
 	// (D-29), as of its last connect. "" = never connected. The agent does not
 	// send this: only the server can know how the agent looks from outside.
@@ -288,6 +293,7 @@ func (s *Server) loadHosts(u user, where string, args ...any) ([]host, error) {
 	defer rows.Close()
 
 	hosts := []host{} // not nil, so an empty list is [] and not null
+	latest := s.latestAgentVersion() // once per list, not once per host
 	for rows.Next() {
 		var h host
 		var lastSeen, createdAt int64
@@ -321,6 +327,10 @@ func (s *Server) loadHosts(u user, where string, args ...any) ([]host, error) {
 			}
 		}
 		h.Online, h.Heartbeat = s.agents.status(h.ID)
+		if latest != "" && versionOlder(h.Version, latest) {
+			h.UpdateAvailable = true
+			h.LatestVersion = latest
+		}
 		hosts = append(hosts, h)
 	}
 	if err := rows.Err(); err != nil {

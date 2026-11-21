@@ -56,6 +56,7 @@ Since M2 every `/api/*` route except `POST /api/login` needs a login. The group 
          "mem_total":16523436032,"lan_ips":["192.168.10.2"]}}
 ```
 - `last_seen_at` is `null` if the agent never connected.
+- `update_available` (always present) is `true` when the agents folder (`dist/`) holds a newer agent than the host's `version`, and then `latest_version` says which. The server reads the file `VERSION` in that folder **each time the list is built** (the build scripts write it: the agent's `Version` constant, like `0.10.0`) and compares it with `version` number by number, so `0.9.2` is older than `0.10.0`. No `VERSION` file, one that is not a version, or a host whose version is unknown, means `false`, not an error. It only says so: updating is done by hand on each host with the install command (D-66).
 - `heartbeat` is `null` when the host is offline (so old numbers are never shown as live) or before its first heartbeat.
 - `online` is true exactly while the agent's control connection is open.
 

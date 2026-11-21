@@ -24,10 +24,11 @@ import (
 // heartbeat (D-50) and starting and stopping the VNC server (D-51), and 0.9.0
 // the same for a Linux desktop (D-54), and 0.9.1 the tray icon's safer service
 // permissions (D-58), and 0.9.2 the security fixes of D-62 to D-64 (its own
-// credentials never sent, the tray status in the registry, VNC passwords): an older
+// credentials never sent, the tray status in the registry, VNC passwords), and 0.10.0
+// the server's address in the registry for the tray's Update headnode… (D-66): an older
 // agent ignores the command, stays silent or answers "unknown operation", so the
 // version is how a person can tell whether a host is up to date.
-const Version = "0.9.2"
+const Version = "0.10.0"
 
 const (
 	heartbeatInterval = 20 * time.Second
@@ -57,6 +58,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	// Before the first connection, so before any file session can start (D-62).
 	secretFile = cfg.Path
+	writeServer(cfg.Server) // for the Windows tray icon's update item (M10, D-66)
 
 	attempt := 0
 	for {

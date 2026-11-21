@@ -26,7 +26,7 @@ So the agent opens an outbound connection to a public server, and that connectio
 | Component | Responsible for | Not responsible for |
 |---|---|---|
 | **headnode** (server) | User login, storing data, knowing which agents are online, sending commands to agents, connecting sessions | TLS (Caddy's job, `D-07`), executing anything on a host |
-| **headnode-agent** | Reporting host info; running shell, file and tunnel sessions **only** when the server asks | Storing user data, authorization decisions |
+| **headnode-agent** | Reporting host info; running shell, file and tunnel sessions **only** when the server asks; starting and stopping the host's VNC server when asked (D-51, D-54); on Windows, a tray icon for the person at the machine (D-57) | Storing user data, authorization decisions |
 | **hnctl** | Opening a local port on the laptop and forwarding it through the server to a target host | — |
 | **Caddy** | Let's Encrypt certificates, HTTPS | Application logic |
 
@@ -41,9 +41,10 @@ This is the core of the architecture (`D-02`).
 ```
 agent ──WS /agent/connect──► server
   → hello      (once at the start: hostname, OS, arch, version)
-  → heartbeat  (every 20 s: CPU, RAM, disk, uptime)
+  → heartbeat  (every 20 s: CPU, RAM, disk, uptime, and whether a VNC server runs or can be started)
   ← open       (server asks the agent to open a session)
   ← fetch      (server asks the agent to download a file)
+  ← vnc_set    (server asks the agent to start or stop the host's VNC server)
 ```
 
 - While this connection is open, the agent counts as **online**. The server keeps an in-memory map `agentID → connection` (file `server/agents.go`).
@@ -175,11 +176,13 @@ server/                     one package, split by FILE:
   enroll.go                 enroll tokens, agent enrollment
   hosts.go                  host list / detail API
   audit.go
-agent/                      conn.go (control + reconnect), shell.go, files.go, download.go, fetch.go, tunnel.go, sysinfo.go
+agent/                      conn.go (control + reconnect), shell.go, files.go, download.go, fetch.go, tunnel.go, sysinfo.go,
+                            service*.go (systemd unit, Windows service), vnc*.go (start and stop a VNC server),
+                            tray*.go + trayicon.go (the Windows tray icon), status*.go (connection line for the icon)
 protocol/                   JSON message structs shared by server and agent
 web/                        index.html, *.js, style.css (embedded into the server binary)
 ```
 
 ## 9. Deliberately NOT included yet
 
-Remote desktop (KVM/VNC/RDP), CCTV, agent auto-update, 2FA, SSO, multiple servers, plugins, notifications. Any of these may be added later, but the architecture above is **not** prepared for them in advance (`D-10`). When the time comes, we change the architecture.
+RDP in the browser, a shell and file manager on Windows, CCTV, agent auto-update, 2FA, SSO, multiple servers, plugins, notifications. (Remote desktop **is** included, as VNC: the host runs an ordinary VNC server on its own loopback, the agent's existing tunnel carries it, and noVNC in the dashboard draws it, so no screen code of our own, D-44 and D-49 to D-54, D-65.) Any of these may be added later, but the architecture above is **not** prepared for them in advance (`D-10`). When the time comes, we change the architecture.

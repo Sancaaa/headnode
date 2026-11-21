@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Active milestone: M9** (the Windows tray icon)
+**Milestones M0 to M9 are done: version 1. M10 (update notice) is built and waits for its test below.** What may come next is in "After the MVP" at the end.
 
 ---
 
@@ -105,28 +105,42 @@ Remote Windows is planned as two milestones (D-44). The idea: the agent never to
 - [x] noVNC added, with a decisions entry (D-49); the server downloads it itself in `start.sh` (D-52)
 - [x] The browser may open a `tunnel` session to `127.0.0.1:5900` only: same role as a shell in `can()`, audited, Origin-checked
 - [x] Viewer page (**Screen** tab): screen scaled to the window, Ctrl+Alt+Del button, disconnect; a clear message when nothing listens on 5900
-- [x] **VNC** button on host rows, and the Screen tab, shown only for hosts where something listens on 5900: the agent says so in its heartbeat (D-50)
+- [x] **VNC** button on host rows, and the Screen tab, shown for hosts that have a screen (Windows, or where the agent found a VNC server or can start one): none for a server with no display (D-50, D-65)
+- [x] Screen page: Start VNC from the page, and zoom, pan and 1:1 for a host with several monitors (D-65)
 - [x] **Start VNC** / **Stop VNC** from the dashboard for Windows hosts, to save the machine's resources (D-51)
 - [x] `install.ps1` installs TightVNC 2.8.90 itself, loopback only, switched off, so a client runs one command and gets the screen (D-50, D-53); `-NoVnc`, `-VncPassword` and `-ReplaceVnc` options
 - [x] Linux desktops (tested on a Raspberry Pi 5): `install.sh` prepares wayvnc or x11vnc, and Start VNC / Stop VNC run it on `127.0.0.1:5900` (D-54)
 
 **Done when:** from the public dashboard, a Windows host's screen opens in a browser tab, mouse and keyboard work, Ctrl+Alt+Del reaches the login screen, and closing the tab ends the session on the host. A Linux host with a VNC server works the same way. A Windows host added with the one install command shows **Start VNC** (the screen is off by default, D-50), and after one click its VNC button, with nothing else to install.
 
-## M9 — Windows tray icon: switch headnode on and off at the laptop (like Tailscale)
-The idea: a person at the Windows machine must be able to turn headnode off, and be **certain** it is off, without typing commands. The dashboard cannot do this (the agent is the link to it), so the switch lives on the machine itself. Do not start before M8 is finished and tested (including the Raspberry Pi).
-- [ ] The agent service lets the person who installed it start it and send it the icon's control codes without administrator rights (the service's permissions are set at install time), so a program in their own session can turn it off and on; never the right to reconfigure a service (D-58)
-- [ ] `headnode-agent tray`: a tray icon in the user's session, in the same `.exe`: blue (the logo's colour) when the agent is connected, grey when it is running but cannot reach the server (D-60)
-- [ ] Menu: the status line, **Start VNC / Stop VNC** (the screen, D-51), **Exit** (D-59, D-60). No "Turn off / on" item and no "off" state in the icon: headnode is on with its icon, or off with none
-- [ ] "Off" really is off: after Exit the service is stopped **and** set not to start at boot, the icon is gone, and nothing of headnode runs until the headnode app is opened
-- [ ] `install.ps1` starts the tray at login (a per-user entry in the registry's Run key) and starts it now; `-NoTray` skips it; uninstalling the service removes the entry
-- [ ] Decisions entry for how the icon is drawn: the library `fyne.io/systray` (preferred: far less code, pure Go on Windows; needs the owner's approval before it is added to `go.mod`, per CLAUDE.md) or `golang.org/x/sys/windows` directly (no new dependency, about 200 lines of Windows message-loop code). Also how the tray talks to the service: service permissions (preferred) or a local named pipe
-- [ ] Guide in `docs/windows.md`: what the icon does, how to check by hand that headnode is off (`Get-Service headnode-agent`, `Get-Process headnode-agent`, nothing on port 5900)
-
-- [ ] **Exit** in the menu (in place of Quit) turns headnode off completely and closes the icon; **headnode** is a searchable Start menu app that shows the icon again and turns headnode on (D-59)
+## M9 — Windows tray icon: see that headnode is on, and exit it at the laptop (like Tailscale)
+The idea: a person at the Windows machine must be able to turn headnode off, and be **certain** it is off, without typing commands. The dashboard cannot do this (the agent is the link to it), so the switch lives on the machine itself.
+- [x] The agent service lets the person who installed it start it and send it the icon's control codes without administrator rights (the service's permissions are set at install time), so a program in their own session can turn it off and on; never the right to reconfigure a service (D-58)
+- [x] `headnode-agent tray`: a tray icon in the user's session, in the same `.exe`: blue (the logo's colour) when the agent is connected, grey when it is running but cannot reach the server (D-60)
+- [x] Menu: the status line, **Start VNC / Stop VNC** (the screen, D-51), **Exit** (D-59, D-60). No "Turn off / on" item and no "off" state in the icon: headnode is on with its icon, or off with none
+- [x] "Off" really is off: after Exit the service is stopped **and** set not to start at boot, the icon is gone, and nothing of headnode runs until the headnode app is opened
+- [x] `install.ps1` starts the tray at login (a per-user entry in the registry's Run key) and starts it now; `-NoTray` skips it; uninstalling the service removes the entry
+- [x] Decisions entry for how the icon is drawn and how it talks to the service: the library `fyne.io/systray` (approved by the owner) and service permissions with control codes, never the right to reconfigure a service (D-57, D-58)
+- [x] Guide in `docs/windows.md`: what the icon does, how to check by hand that headnode is off (`Get-Service headnode-agent`, `Get-Process headnode-agent`, nothing on port 5900)
+- [x] **Exit** in the menu (in place of Quit) turns headnode off completely and closes the icon; **headnode** is a searchable Start menu app that shows the icon again and turns headnode on (D-59)
 
 **Done when:** after installing with the one command, a blue tray icon appears; **Exit** closes the icon, the host goes *offline* in the dashboard within a minute, `Get-Service headnode-agent` says `Stopped` and `Manual` (D-58), no `headnode-agent` process exists, and a reboot does not bring it back or show an icon; typing **headnode** in the Start menu and opening it shows the icon and turns all of it back on. Linux has no tray (a Raspberry Pi or a server is managed with `systemctl`).
+
+## M10 — Update notice: the dashboard says which agents are behind, the update stays manual (D-66)
+The idea: the installers already update a host (run the install command again without a token). What is missing is knowing **which** hosts need it. The server tells you; you update each machine yourself.
+- [x] The agent build script writes the agent version to `dist/VERSION`, next to the programs
+- [x] The server reads `dist/VERSION` when it needs it (not once at start: agents can be rebuilt without a restart, D-40) and compares it with the version each agent sends in `hello`, number by number (`0.10.0` is newer than `0.9.2`)
+- [x] Hosts page: an **Update available** badge on hosts that are behind, and "· N outdated" in the count pill
+- [x] **How to update** dialog on such a host: the exact update command for its OS, with a Copy button (Linux: paste it in the Shell tab; Windows: an administrator PowerShell, through the Screen tab or at the machine)
+- [x] Windows tray: an **Update headnode…** menu item that runs the update in an administrator PowerShell (a UAC prompt), the same `install.ps1` update as the dialog's command. From afar: Screen tab → tray icon → Update → UAC, through VNC
+  - [x] The tray needs the server's address: the agent writes it next to `Status` in `HKLM\SOFTWARE\headnode` (D-63: only administrators and the system can write there, every user can read)
+  - [x] The address is checked strictly (`https://` + host + optional port) before it goes into the command, and the elevated PowerShell downloads the script itself: nothing is run from a folder a normal user can write to
+  - [x] If the UAC prompt is accepted, the old icon closes (the installer starts the new one); if it is cancelled, nothing changes
+- [x] No new protocol message, and the agent changes only by the one registry value above; no `dist/VERSION` means no badges, not an error
+
+**Done when:** after building a newer agent into `dist/`, the hosts with the older version show *Update available* without restarting the server; running the copied command on one of them makes its badge disappear after it reconnects. On a Windows host, **Update headnode…** in the tray, after the UAC prompt, does the same and leaves one blue icon.
 
 ---
 
 ## After the MVP (not scheduled)
-To be chosen later by the project owner: shell and file manager on Windows, RDP in the browser, agent auto-update (A3), 2FA (C3), session recording (C6), Telegram notifications (D2), HTTP web relay (B7), bulk commands (B8), CCTV (B15).
+To be chosen later by the project owner: shell and file manager on Windows, RDP in the browser, one-click agent update from the dashboard (A3, see D-66 for what it needs first), 2FA (C3), session recording (C6), Telegram notifications (D2), HTTP web relay (B7), bulk commands (B8), CCTV (B15).

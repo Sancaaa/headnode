@@ -314,9 +314,11 @@ function renderHosts(hosts) {
   const addHost = isAdmin() ? button('Add host', 'btn btn-primary', addHostDialog) : null;
   // Counted here from the list the page already has, so there is no extra request.
   const online = hosts.filter((host) => host.online).length;
+  const outdated = hosts.filter((host) => host.update_available).length; // M10, D-66
   const page = [
     pageHead('Hosts', 'Manage the machines connected to headnode.', addHost),
-    h('div', { class: 'pill' }, count(hosts.length, 'host', 'hosts') + ' · ' + online + ' online'),
+    h('div', { class: 'pill' }, count(hosts.length, 'host', 'hosts') + ' · ' + online + ' online' +
+      (outdated > 0 ? ' · ' + outdated + ' outdated' : '')),
   ];
 
   if (hosts.length === 0) {
@@ -342,6 +344,55 @@ function hostsTable(hosts) {
     h('tbody', {}, hosts.map(hostRow)));
 }
 
+// "Update available" on a host whose agent is older than the newest one this server has
+// (M10, D-66). It only says so: clicking it shows how to update that host by hand.
+function updateBadge(host) {
+  if (!host.update_available) return null;
+  const badge = h('button', {
+    class: 'tag tag-update', type: 'button',
+    title: 'Agent ' + host.version + ', newest is ' + host.latest_version,
+  }, 'Update available');
+  badge.addEventListener('click', (event) => {
+    event.stopPropagation(); // not also the row's own link
+    updateDialog(host);
+  });
+  return h('div', {}, badge);
+}
+
+// How to update one host: the command that updates an enrolled host (install.sh and
+// install.ps1 without a token do that), for its operating system. The address is the
+// one this page was loaded from, which is the server the host belongs to.
+function updateDialog(host) {
+  const server = location.origin;
+  const fields = [
+    h('p', {}, host.name + ' runs headnode-agent ' + host.version + '. This server has ' + host.latest_version + '. ' +
+      'The update keeps the host\'s identity: it replaces the program and restarts the agent.'),
+  ];
+  if (isWindows(host)) {
+    fields.push(
+      h('p', {}, 'On the Windows machine, click the headnode icon in the tray and choose Update headnode…, then approve ' +
+        'the prompt that asks for an administrator. From afar: the Screen tab, then the tray icon, then the same menu item. ' +
+        'Or run this in PowerShell opened as administrator:'),
+      commandBlock('& ([scriptblock]::Create((irm ' + server + '/install.ps1)))'),
+      h('p', { class: 'sub' }, 'A host that runs an agent from before the tray menu had Update headnode… needs this command once. ' +
+        'The agent restarts during the update, so a screen opened through it closes: Reconnect after a few seconds.'));
+  } else {
+    fields.push(
+      h('p', {}, 'On the host, in its Shell tab here (or any terminal on it), run:'),
+      commandBlock('curl -fsSL ' + server + '/install.sh | sudo sh'),
+      h('p', { class: 'sub' }, 'It needs sudo, so it asks for the password. The agent restarts at the end, which ends the shell ' +
+        'the command was run from: open the Shell tab again after a few seconds.'));
+  }
+  fields.push(h('p', { class: 'sub' }, 'The badge goes away after the host reconnects with the new version.'));
+  openDialog({
+    title: 'Update ' + host.name,
+    fields,
+    submitLabel: 'Done',
+    cancelLabel: null,
+    onSubmit: async () => null,
+  });
+}
+
 function hostRow(host) {
   const info = host.info || {};
   const ips = info.lan_ips || [];
@@ -351,7 +402,8 @@ function hostRow(host) {
       h('a', { class: 'name', href: hostLink(host.id) }, host.name),
       h('div', { class: 'sub' }, [info.platform || host.os, host.group_name].filter(Boolean).join(' · ')),
       // Only admins can see a host that is in no group, so this is a hint for them.
-      host.group_id == null ? h('div', {}, h('span', { class: 'tag' }, 'No group')) : null),
+      host.group_id == null ? h('div', {}, h('span', { class: 'tag' }, 'No group')) : null,
+      updateBadge(host)),
     h('td', { class: 'col-addr num' },
       // LAN: the host's own addresses (bold, they are what identifies it on its
       // network). WAN: the address the server saw the agent connect from, which

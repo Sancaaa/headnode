@@ -66,7 +66,7 @@ git pull
 sudo sh start.sh
 ```
 
-It rebuilds, replaces the program and restarts the service. The data is not touched. Hosts reconnect by themselves within a minute, and database changes are applied when the server starts (D-30). To update an agent on a host, run its install command again without `--token`: `curl -fsSL https://headnode.example.com/install.sh | sudo sh`. To remove an agent: `headnode-agent service uninstall` on that host, then delete the host in the dashboard.
+It rebuilds, replaces the program and restarts the service. The data is not touched. Hosts reconnect by themselves within a minute, and database changes are applied when the server starts (D-30). `start.sh` also writes `dist/VERSION` (the version of the agents it just built), and the dashboard then marks every host that runs an older agent: an **Update available** tag on the Hosts page and "N outdated" in the count, with a dialog that shows the command (D-66). Updating stays a decision for each machine: to update an agent on a host, run its install command again without `--token`: `curl -fsSL https://headnode.example.com/install.sh | sudo sh` (on Windows, the tray icon's **Update headnode…**, see [windows.md](windows.md)). To remove an agent: `headnode-agent service uninstall` on that host, then delete the host in the dashboard.
 
 ## Everyday commands
 
