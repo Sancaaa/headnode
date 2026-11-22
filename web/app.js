@@ -63,6 +63,7 @@ const ICON_PLAY = 'M5 3.5l7.5 4.5L5 12.5z';
 const ICON_STOP = 'M4.5 4.5h7v7h-7z';
 const ICON_MORE_V = 'M8 3.2v1M8 7.5v1M8 11.8v1';
 const ICON_DOWN = 'M8 3v10M4.5 9.5L8 13l3.5-3.5';
+const ICON_DOCKER = 'M1.8 8.8h10.2c.6-1.2 1.7-1.6 2.5-1.2-.3 1-.3 1.7.1 2.2-.8 2.4-2.8 3.7-6.4 3.7-3.8 0-6.2-1.8-6.4-4.7zM4.2 8.8V6.2h5.6v2.6M7 6.2v2.6M6 6.2V3.8h2.4v2.4';
 
 function button(label, className, onClick) {
   const b = h('button', { class: className, type: 'button' }, label);
@@ -449,7 +450,8 @@ function hostRow(host) {
       h('div', { class: 'sub' }, 'WAN: ' + (host.wan_addr || '—'))),
     h('td', { class: 'col-usage num' }, usageSummary(host)),
     h('td', {}, statusText(host)),
-    h('td', { class: 'col-act' }, filesButton(host), shellButton(host), vncButton(host)));
+    h('td', { class: 'col-act' },
+      h('div', { class: 'host-actions' }, filesButton(host), shellButton(host), vncButton(host), dockerButton(host))));
 
   // The whole row is clickable. The name is a real link too, so the page
   // still works from the keyboard.
@@ -529,6 +531,14 @@ function hasScreen(host) {
 function vncButton(host) {
   if (!host.online || !hasScreen(host)) return null;
   const link = h('a', { class: 'btn btn-small', href: screenHref(host.id) }, icon(ICON_HOSTS), 'VNC');
+  link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
+  return link;
+}
+
+// The Docker button on a host's row: same eligibility check as the Docker tab (D-70).
+function dockerButton(host) {
+  if (!hasDocker(host)) return null;
+  const link = h('a', { class: 'btn btn-small', href: dockerHref(host.id) }, icon(ICON_DOCKER), 'Docker');
   link.addEventListener('click', (event) => event.stopPropagation()); // not also the row's own link
   return link;
 }

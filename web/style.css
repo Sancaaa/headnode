@@ -156,12 +156,8 @@ tr:hover .name { color: var(--text-link); }
 /* The Hosts table: every cell is centered vertically, so a one-line status
    and a two-line addresses cell sit on the same middle line as the name. */
 .hosts-table td { vertical-align: middle; }
-.hosts-table .col-act { width: 270px; white-space: nowrap; }
-.hosts-table .col-act .btn + .btn { margin-left: 8px; }
-/* Both buttons sit on the middle of the row. Without this they line up on their
-   text baselines, and the one with a picture (Files) rides higher than the one
-   with only text (Shell). */
-.hosts-table .col-act .btn { vertical-align: middle; }
+.hosts-table .col-act { width: 200px; }
+.host-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .lan { font-weight: 600; }
 .col-host { width: 30%; }
 .col-addr { width: 24%; }
