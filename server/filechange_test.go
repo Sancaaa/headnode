@@ -202,15 +202,18 @@ func TestFinishedFilesSessionsAreRememberedBriefly(t *testing.T) {
 	table.end(files)
 	table.end(shell)
 
-	if user, agent, ok := table.filesOwner(files.id); !ok || user != 7 || agent != "agent-a" {
+	if user, agent, ok := table.changeOwner(files.id, protocol.KindFiles); !ok || user != 7 || agent != "agent-a" {
 		t.Errorf("owner of the ended files session = %d, %q, %v, want 7, agent-a, true", user, agent, ok)
 	}
-	if _, _, ok := table.filesOwner(shell.id); ok {
+	if _, _, ok := table.changeOwner(files.id, protocol.KindDocker); ok {
+		t.Error("a files session must not pass as a docker session")
+	}
+	if _, _, ok := table.changeOwner(shell.id, protocol.KindFiles); ok {
 		t.Error("an ended shell session must not be remembered: shells report no changes")
 	}
 
 	time.Sleep(80 * time.Millisecond)
-	if _, _, ok := table.filesOwner(files.id); ok {
+	if _, _, ok := table.changeOwner(files.id, protocol.KindFiles); ok {
 		t.Error("the owner should be forgotten after the keep time")
 	}
 

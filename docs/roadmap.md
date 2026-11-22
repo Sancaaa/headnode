@@ -4,7 +4,7 @@ Each milestone is a **vertical slice**: it ends with a demo that runs end to end
 
 Feature codes (`A1`, `B2`, …) refer to the MeshCentral feature list chosen at the start of the project.
 
-**Milestones M0 to M10 are done: version 1. M11 (accounts) is built and waits for its test below.** What may come next is in "After the MVP" at the end.
+**Milestones M0 to M10 are done: version 1. M11 (accounts) and M12 (Docker) are built and wait for their tests below.** M12 was started before M11's done criteria were checked, because the owner decided so (2026-11-22): the two touch different files, but check both. What may come next is in "After the MVP" at the end.
 
 ---
 
@@ -161,6 +161,20 @@ The idea: today a password is set once, when the user is created, and never agai
 - [x] The sidebar user block and the Profile page show it for **every** user, in place of the initials
 
 **Done when:** a user changes their password and their other browser and `hnctl` are logged out; an admin disables a user and that user's open shell closes and login fails; the last admin cannot remove their own admin rights; every one of these appears in the audit log; the sidebar shows the placeholder picture and the display name.
+
+## M12 — Docker on a host (D-70)
+The idea: the agent talks to the host's Docker Engine on its socket and shows containers, Compose stacks, images, volumes and networks in a **Docker** tab, with the `docker` command behind every button. Linux only. Nothing is forced: when Docker refuses, its own message is shown. The course this serves (Compose stacks, image sizes, named volumes, delivery by image tag) is why: the tab shows in one page what takes many commands in a terminal.
+- [x] Heartbeat: whether the host has Docker and whether the agent may use it (`docker`: `none`, `no_access` or `ok`)
+- [x] The agent picks the Engine API version from the engine's own `/version`, never above the newest one it was tested with and never below the engine's minimum
+- [x] `docker` session: containers, inspect (environment values hidden), logs, start / stop / restart / remove, images, remove_image, volumes, networks, prune
+- [x] Compose stacks from the containers' labels: list, down, up, restart, "down and up again" (`docker compose`, arguments always separate)
+- [x] Every change is audited as `docker_<op>`, refused ones included (`docker_change` control message, like `file_change`)
+- [x] **Docker** tab on the host page, shown only when the host has Docker; every action shows its command, a refusal shows Docker's own message
+- [x] The agent is 0.12.0, so the Hosts page offers the update (M10)
+
+**Done when:** on a VM with Docker and a Compose stack, the Docker tab lists the stack, its containers and the image revision each runs; the logs of a container show; "down and up again" keeps a named volume's data; stopping and starting a container works; removing a running container shows Docker's refusal, and removing it after a stop works; removing an image that a container uses shows Docker's refusal; each of these, refusals included, is in the audit log; a viewer cannot open the tab; a host without Docker has no tab.
+
+Not in M12: redeploying a container with another image tag, rollback to the previous container, forced removes, building or pulling images, editing compose files, an interactive `docker exec` (the Shell tab does that), Swarm, Docker on Windows or macOS.
 
 ---
 

@@ -26,7 +26,7 @@ So the agent opens an outbound connection to a public server, and that connectio
 | Component | Responsible for | Not responsible for |
 |---|---|---|
 | **headnode** (server) | User login, storing data, knowing which agents are online, sending commands to agents, connecting sessions | TLS (Caddy's job, `D-07`), executing anything on a host |
-| **headnode-agent** | Reporting host info; running shell, file and tunnel sessions **only** when the server asks; starting and stopping the host's VNC server when asked (D-51, D-54); on Windows, a tray icon for the person at the machine (D-57) | Storing user data, authorization decisions |
+| **headnode-agent** | Reporting host info; running shell, file, tunnel and Docker sessions **only** when the server asks; starting and stopping the host's VNC server when asked (D-51, D-54); on Linux, talking to the host's Docker Engine on its socket (D-70); on Windows, a tray icon for the person at the machine (D-57) | Storing user data, authorization decisions |
 | **hnctl** | Opening a local port on the laptop and forwarding it through the server to a target host | — |
 | **Caddy** | Let's Encrypt certificates, HTTPS | Application logic |
 
@@ -41,7 +41,8 @@ This is the core of the architecture (`D-02`).
 ```
 agent ──WS /agent/connect──► server
   → hello      (once at the start: hostname, OS, arch, version)
-  → heartbeat  (every 20 s: CPU, RAM, disk, uptime, and whether a VNC server runs or can be started)
+  → heartbeat  (every 20 s: CPU, RAM, disk, uptime, whether a VNC server runs or can be started, whether Docker is usable)
+  → file_change / docker_change  (what a files or docker session changed, for the audit log, D-37, D-70)
   ← open       (server asks the agent to open a session)
   ← fetch      (server asks the agent to download a file)
   ← vnc_set    (server asks the agent to start or stop the host's VNC server)
@@ -83,6 +84,7 @@ Relay rules:
 | `files` | File manager page | Simple file operations | JSON request/response (`list`, `stat`, `mkdir`, `rename`, `delete`) |
 | `download` | The server itself (forwarded to the browser as an HTTP response) | Reads a file and sends its bytes | Binary until EOF |
 | `tunnel` | `hnctl` | `net.Dial` to the target `host:port` | Raw binary, both ways |
+| `docker` | Docker tab | Calls the Docker Engine API on `/var/run/docker.sock` (and the `docker compose` CLI for stacks) | JSON request/response, like `files`; needs the role of a shell (the socket is root) |
 
 **Uploads and bulk sends** deliberately do **not** go through sessions (`D-03`):
 1. The browser uploads the file to the server (`POST /api/files`). The server stores it at `data/files/<sha256>`.
@@ -152,6 +154,8 @@ This system is effectively a "master key" to every host, so the items below are 
 
 Limitation **accepted** for now: the agent usually runs as root/SYSTEM. Anyone allowed to open a shell on a host is treated as allowed to do anything on that host.
 
+**Docker (D-70).** The Docker tab needs the agent's user to be in the `docker` group, and **membership of that group is root on the machine** (a container can mount `/`). On a host where that is granted, the agent is effectively root again, which is the opposite of what D-48 chose for the default; the person decides that per host. For the same reason a `docker` session needs the role of a shell, not a read-only one: even listing containers would leak their environment, and `inspect` hides the values anyway as a second line.
+
 ## 8. Code layout (planned)
 
 ```
@@ -177,6 +181,8 @@ server/                     one package, split by FILE:
   hosts.go                  host list / detail API
   audit.go
 agent/                      conn.go (control + reconnect), shell.go, files.go, download.go, fetch.go, tunnel.go, sysinfo.go,
+                            docker.go (the session loop and the heartbeat probe), docker_api.go (the Engine API on the socket),
+                            docker_compose.go (stacks from labels, the `docker compose` CLI),
                             service*.go (systemd unit, Windows service), vnc*.go (start and stop a VNC server),
                             tray*.go + trayicon.go (the Windows tray icon), status*.go (connection line for the icon)
 protocol/                   JSON message structs shared by server and agent

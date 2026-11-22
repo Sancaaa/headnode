@@ -103,7 +103,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `password_change`, `password_reset`, `display_name_set`, `session_revoke`, `sessions_revoke_others`, `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `password_change`, `password_reset`, `display_name_set`, `session_revoke`, `sessions_revoke_others`, `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`, `docker_start`, `docker_stop`, `docker_restart`, `docker_remove`, `docker_remove_image`, `docker_prune`, `docker_stack`. A failed login records the address only, never the username that was typed.
 
 #### Uploading and sending files (M4)
 
@@ -330,7 +330,7 @@ The agent saves the reply, together with the server URL, to `agent.json` (permis
 
 | Path | Used by |
 |---|---|
-| `/ui/sessions/{id}` | Browser (shell, files) and `hnctl` (tunnel) |
+| `/ui/sessions/{id}` | Browser (shell, files, docker) and `hnctl` (tunnel) |
 
 ## 2. JSON message format (control connection)
 
@@ -378,10 +378,13 @@ A **Windows** agent (D-47) sends the same two messages with `"os": "windows"`. I
   "mem_used": 7516192768, "mem_total": 16523436032,
   "disk_used": 41000000000, "disk_total": 250000000000,
   "uptime_sec": 67240,
-  "vnc": true, "vnc_control": true, "vnc_password": "Zx9Qw2Lm"
+  "vnc": true, "vnc_control": true, "vnc_password": "Zx9Qw2Lm",
+  "docker": "ok"
 }}
 ```
 `vnc` is `true` when something accepts connections on `127.0.0.1:5900` on the host (the agent checks once a minute, D-50). The dashboard shows the VNC button and the Screen tab only for hosts where it is `true`. `vnc_control` is `true` when the agent can start and stop the host's VNC server (on Windows a TightVNC service is installed, D-51; on Linux a desktop session is running and `wayvnc` (Wayland) or `x11vnc` (X11) is installed, D-54): the dashboard then offers **Start VNC** and **Stop VNC**. An agent older than 0.8.0 sends neither, which reads as `false`. After a `vnc_set` the agent sends a heartbeat at once, outside the 20-second rhythm, so the new `vnc` value shows up in a few seconds. `vnc_password` (D-64) is the password of the VNC server the agent started: a new random one each time it starts it (TightVNC on Windows, x11vnc on Linux; wayvnc takes none, so it is absent there). It is sent only while `vnc` is `true`. The server keeps it in memory only, removes it from every heartbeat it hands out (the host list and the host page), and gives it only in the reply to a screen tunnel, below.
+
+`docker` (M12, D-70) says whether the host has a Docker Engine the agent may use: `"none"` (no socket, or nothing answers on it, or the agent is not on Linux), `"no_access"` (the socket is there but the agent's user may not open it: it is not in the `docker` group) or `"ok"` (`GET /_ping` answered within one second). The agent checks on every heartbeat, so the dashboard learns within 20 seconds that Docker was installed, stopped, or that the user was added to the group (the agent must be restarted for a new group to count). An agent older than 0.12.0 does not send it, which reads as `"none"`. It is passed through unchanged in the `heartbeat` of the host objects (§1), and the Hosts page shows the Docker tab for `"ok"` and `"no_access"`.
 
 The server treats the agent as **dead** if no message at all arrives within 60 seconds, and closes the connection. This is the only liveness mechanism. There is no separate ping/pong.
 
@@ -398,6 +401,13 @@ The server treats the agent as **dead** if no message at all arrives within 60 s
 `op` is `mkdir`, `rename`, `copy`, `chmod`, `write` or `delete`. `path` is the path acted on (for a rename or a copy, the old one). `to` is the new path and appears only for a rename or a copy. `recursive` appears only for a delete, and only when true. `mode` appears only for a chmod: the mode that was asked for, even when it was refused. `size` appears only for a write: how many bytes were sent to be written (the text itself is never reported or audited: a file can hold a password). `error` is short text and appears only when `ok` is false. The report says **what** happened and never **who** did it: the server finds the user from `session_id`, which it created for that user.
 
 Not reported: reads (`list`, `stat`, `home`, `props`), and any change a read-only session refused (nothing was attempted). The server drops, with a warning in its log, a report whose session id is unknown, is not a `files` session, or was opened on a different agent. It keeps the owner of an ended `files` session for 5 minutes, because this message travels on the control connection and the session's traffic on another, so the last report can arrive just after the session ended. A report that cannot be sent is lost (the agent logs a warning); it never breaks the session. The server records each one as the audit action `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write` or `file_delete`, with `path=<path>` (a rename or a copy: `path=<old> -> <new>`, a recursive delete: `path=<path> recursive=true`, a chmod: `path=<path> mode=<mode>`, a write: `path=<path> size=<bytes>`) and, on failure, ` FAILED: <error>`.
+
+**`docker_change`** (M12, D-70): what one change in a `docker` session did, sent after it ran, **whether Docker accepted it or refused it**. Exactly the role `file_change` has for the file manager.
+```json
+{"type":"docker_change","data":{"session_id":"s_3a7c…","op":"remove","command":"docker rm web","ok":true}}
+{"type":"docker_change","data":{"session_id":"s_3a7c…","op":"remove","command":"docker rm web","ok":false,"error":"You cannot remove a running container 3f2a…. Stop the container before attempting removal or force remove"}}
+```
+`op` is `start`, `stop`, `restart`, `remove`, `remove_image`, `prune` or `stack`. `command` is the CLI form of what was done or tried (the same text the answer to the browser carries). `error` is Docker's own message (or the last lines of `docker compose`'s stderr, at most 200 characters here) and appears only when `ok` is false. The report says **what** happened and never **who** did it: the server finds the user from `session_id`, which it created for that user, and drops a report whose session id is unknown, is not a `docker` session, or was opened on another agent (it keeps the owner of an ended `docker` session for 5 minutes, like `files`). Not reported: reads (`containers`, `inspect`, `logs`, `images`, `volumes`, `networks`, `stacks`), and a request the agent refused **before** calling Docker (a bad name, an unknown stack): nothing was attempted. The server records each one as the audit action `docker_<op>` with `command=<command>` and, on failure, ` FAILED: <error>`.
 
 ### Server → Agent
 
@@ -428,13 +438,13 @@ Then it answers with `fetch_result`, whose `error` is short plain text (`"permis
 
 ## 4. Sessions
 
-`POST /api/hosts/{id}/sessions` with `{"kind": "...", "params": {...}}` → `201 {"id":"s_…"}`. `"shell"` (M3), `"files"` (M4) and `"tunnel"` (M5) exist so far. A `files` reply also has `"readonly"`, see below. A `tunnel` reply whose target port is `5900` also has `"vnc_password"` when the host reported one (D-64): the dashboard's viewer logs in with it by itself. The reply is `Cache-Control: no-store`, and the password is never written to the audit log.
+`POST /api/hosts/{id}/sessions` with `{"kind": "...", "params": {...}}` → `201 {"id":"s_…"}`. `"shell"` (M3), `"files"` (M4), `"tunnel"` (M5) and `"docker"` (M12) exist so far. A `files` reply also has `"readonly"`, see below. A `tunnel` reply whose target port is `5900` also has `"vnc_password"` when the host reported one (D-64): the dashboard's viewer logs in with it by itself. The reply is `Cache-Control: no-store`, and the password is never written to the audit log.
 
 | Status | When |
 |---|---|
 | 201 | The session was created and the agent was told to open it (`open` on its control connection). |
 | 400 | Unsupported `kind`, or a body that is not valid JSON. |
-| 403 | The user can see the host but their role does not allow this kind of session: a `viewer` gets no shell (`shell` needs `operator`). Every role in a group may open a `files` session, so for `files` this only happens to someone with no role at all. |
+| 403 | The user can see the host but their role does not allow this kind of session: a `viewer` gets no shell, no tunnel and no Docker session (`shell`, `tunnel` and `docker` need `operator`). Every role in a group may open a `files` session, so for `files` this only happens to someone with no role at all. |
 | 404 | The host does not exist, or the user may not see it (same answer for both). |
 | 409 | The host is offline: `{"error":"host offline"}`. |
 
@@ -525,6 +535,63 @@ The file is streamed: the server holds one chunk at a time and nothing is saved 
 - What flows is whatever the program on the laptop speaks. For `ssh` it is the SSH protocol, encrypted end to end between `ssh` and `sshd`: the tunnel, the server and the agent only move bytes. The audit log records `session_open` with `kind=tunnel target=127.0.0.1:22` and `session_close` with the duration.
 
 `hnctl forward 2222:web-01:127.0.0.1:22` opens a listening port on the laptop (on `127.0.0.1` by default) and, for each connection, does exactly this: `POST /api/hosts/{id}/sessions` with its bearer token, then connects `/ui/sessions/{id}` and copies bytes between the local connection and the WebSocket.
+
+### `docker` (M12, D-70)
+- The browser asks with `{"kind":"docker","params":{}}` and gets `201 {"id":"s_…"}`. It needs the **same role as a shell** (`operator`, or admin): the Docker socket is root on the host, and even a read-only variant would leak every container's environment. A viewer gets `403`; the host must be online (`409`). Any `params` it sends are ignored. The audit log has `session_open` / `session_close` with `kind=docker`, and the Audit page says "Docker".
+- Text-frame request/response, exactly like `files`: `id` matches each answer to its request, binary frames are ignored, a frame that is not valid JSON gets `{"ok":false,"error":"invalid request"}`, an unknown `op` is `"unknown operation"`, and a failed request never ends the session. Requests are answered in the order they finish, not the order they were sent (a `stack` can take minutes while a `containers` should not wait for it), so the `id` matters; at most 8 run at once.
+- **Every answer, success or refusal, carries `"command"`**: the CLI form of what was done or tried, for the page to show. The relay never reads the session, so the agent reports each **change** as a `docker_change` on the control connection (§3) and the server audits it under the session's user.
+- The agent calls the **Docker Engine API** on the unix socket `/var/run/docker.sock` with plain `net/http` (no Docker SDK). It asks `GET /version` (unversioned) and uses the engine's `ApiVersion`, but no higher than `maxAPIVersion` (a constant in `agent/docker_api.go`: the newest version this code was written against), and never below the engine's `MinAPIVersion`. Every later call uses `/v<version>/…`. The version is chosen once, when the session opens.
+- **Docker's refusals are passed on unchanged.** The Engine API answers a refusal with an HTTP error status and `{"message":"…"}`; the agent answers `{"ok":false,"error":"<that message>","command":"…"}`. Nothing is retried and nothing is ever forced: `remove` and `remove_image` send `force=false`, and there is no `force` field. A failing `docker compose` call answers with its exit status and the last lines of its output (at most 4 KB).
+- On a host that is not Linux, or where the socket cannot be used, every request is answered `{"ok":false,"error":"…"}` with the reason (`"Docker is not supported on this system"`, `"Docker is not installed or not running on this host"`, `"this agent may not use Docker: add its user to the docker group …"`).
+
+```json
+→ {"id":1,"op":"containers"}
+← {"id":1,"ok":true,"command":"docker ps -a","containers":[
+     {"id":"3f2a…","name":"web","image":"ghcr.io/x/app:9c1e2d4","image_id":"sha256:…","state":"running",
+      "status":"Up 3 hours","created":"2026-11-22T08:00:00Z","ports":["0.0.0.0:8080->80/tcp"],
+      "project":"shop","service":"web","revision":"9c1e2d4…"}]}
+→ {"id":2,"op":"inspect","container":"web"}
+← {"id":2,"ok":true,"command":"docker inspect web","inspect":{…}}
+→ {"id":3,"op":"logs","container":"web","tail":200}
+← {"id":3,"ok":true,"command":"docker logs --tail 200 web","logs":"…","truncated":false}
+→ {"id":4,"op":"start|stop|restart|remove","container":"web"}
+← {"id":4,"ok":false,"command":"docker rm web",
+   "error":"You cannot remove a running container 3f2a…. Stop the container before attempting removal or force remove"}
+→ {"id":5,"op":"images"}
+← {"id":5,"ok":true,"command":"docker images","images":[{"id":"sha256:…","tags":["ghcr.io/x/app:9c1e2d4"],
+     "size":84123456,"created":"…","used_by":["web"],"dangling":false}]}
+→ {"id":6,"op":"remove_image","image":"sha256:<64 hex>"}
+← {"id":6,"ok":true,"command":"docker rmi sha256:…","removed":["Untagged: …","Deleted: sha256:…"]}
+→ {"id":7,"op":"volumes"}
+← {"id":7,"ok":true,"command":"docker volume ls","volumes":[{"name":"shop_db","driver":"local",
+     "mountpoint":"/var/lib/docker/volumes/shop_db/_data","anonymous":false,"used_by":["db"],"project":"shop"}]}
+→ {"id":8,"op":"networks"}
+← {"id":8,"ok":true,"command":"docker network ls","networks":[{"id":"…","name":"shop_default","driver":"bridge",
+     "scope":"local","containers":[{"name":"web","address":"172.18.0.3"}]}]}
+→ {"id":9,"op":"prune","what":"containers|images|build_cache","all":false}
+← {"id":9,"ok":true,"command":"docker container prune -f","removed":["3f2a…"],"space_reclaimed":1048576}
+→ {"id":10,"op":"stacks"}
+← {"id":10,"ok":true,"command":"docker compose ls","stacks":[{"project":"shop","working_dir":"/srv/shop",
+     "config_files":["/srv/shop/compose.yml"],"missing_files":[],"services":["db","web"],"containers":["shop-db-1","shop-web-1"],
+     "running":2,"total":2,"command":"docker compose -p shop --project-directory /srv/shop -f /srv/shop/compose.yml"}]}
+→ {"id":11,"op":"stack","project":"shop","action":"down|up|restart|recycle","volumes":false}
+← {"id":11,"ok":true,"command":"docker compose -p shop --project-directory /srv/shop -f /srv/shop/compose.yml down","output":"…"}
+```
+
+What each operation does, and what it checks (the agent checks everything the browser sends, because it should trust nobody):
+- **Names and ids.** A container is a name or id matching `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` (at most 200 characters); an image is `sha256:` plus 64 hex characters, or the 64 hex characters alone; `tail` is 1 to 2000 (default 200); `what` is one of the three words; `action` one of the four. Anything else is answered `"ok":false` with the reason and **nothing is sent to Docker** (and nothing is reported as a change).
+- `containers` lists every container (`docker ps -a`), sorted by name. `ports` are like `0.0.0.0:8080->80/tcp` (or `80/tcp` when not published). `project` and `service` come from the Compose labels (`com.docker.compose.project`, `com.docker.compose.service`) and are `""` for a container Compose does not own. `revision` is the image's `org.opencontainers.image.revision` label, which `docker/metadata-action` sets in CI: it answers "which commit runs here" (empty when the image has none).
+- `inspect` is `docker inspect` of one container, with **every environment value replaced by `(hidden)`** (`"DB_PASSWORD=(hidden)"`): the names show what is configured, the values stay on the host.
+- `logs` is the last `tail` lines of stdout and stderr together, at most 1 MB (`"truncated":true` when the beginning was cut). The Engine API multiplexes the two streams with an 8-byte header per frame when the container has no TTY; the agent demultiplexes it (a frame may be split across reads), and with a TTY the stream is raw.
+- `start`, `stop`, `restart` are `docker start|stop|restart <container>` (Docker's own default stop timeout, 10 s). A container that is already in that state is not an error (the Engine answers `304`).
+- `remove` is `docker rm <container>` **without** `-f` and **without** `-v`: a running container is refused by Docker, and the container's anonymous volumes stay (the page says so).
+- `images` lists the images, **biggest first** (what a multi-stage build saves is visible there); `used_by` names the containers that use the image; `dangling` is true for an image with no tag. `remove_image` is `docker rmi <id>` without `-f`: Docker refuses an image a container uses, and its message is shown.
+- `volumes` says whether a volume is `anonymous` (its name is 64 hex characters) and which containers use it. `networks` lists which containers are on each network and their addresses, so it is visible who can reach whom by name.
+- `prune`: `containers` is `docker container prune -f` (stopped containers), `images` is `docker image prune -f` (dangling images only) or, with `"all":true`, `docker image prune -a -f` (**every image no container uses**), `build_cache` is `docker builder prune -f`. The answer has what was removed (`removed`) and `space_reclaimed` in bytes, as the Engine reports it.
+- `stacks` finds Compose stacks from the labels of the containers that exist (`com.docker.compose.project`, `.project.working_dir`, `.project.config_files`), sorted by project. Compose is not part of the Engine API. `missing_files` lists config files that no longer exist on the host (a deleted compose file is shown, not hidden).
+- `stack` runs the `docker compose` CLI, with separate arguments and never through a shell: `docker compose -p <project> --project-directory <dir> -f <file> … down | up -d | restart`. **The browser sends only the project name**, which must match a stack that exists right now; the directory and files come from the labels of its containers, and a missing file is answered with a clear error before anything runs. `recycle` is `down` and then `up -d`, with **no `-v`** unless `"volumes":true` was sent (then `down -v`, which deletes the stack's named volumes: the page says so): named volumes keep their data across a `down` without `-v`. `volumes` is refused with `up` and `restart`.
+
+Anything beyond this is out of scope: no force, no redeploy with another tag, no rollback, no build or pull, no `exec`.
 
 ## 5. WebSocket close codes
 

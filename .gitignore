@@ -25,6 +25,5 @@ Thumbs.db
 .vscode/
 .idea/
 
-# saved third-party pages used only as design reference
-/Machines - Tailscale.html
-/Machines - Tailscale_files/
+# other dashboard
+otherDashboard/

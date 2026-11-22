@@ -337,7 +337,18 @@ type Heartbeat struct {
 	// tunnel to someone allowed to open one: it is removed from every heartbeat the
 	// server hands out (registry.status). Empty when the VNC server takes none.
 	VNCPassword string `json:"vnc_password,omitempty"`
+	// Docker says whether the host has a Docker Engine this agent may use: DockerNone,
+	// DockerNoAccess or DockerOK (M12, D-70). An agent older than 0.12.0 does not send
+	// it, which reads as DockerNone.
+	Docker string `json:"docker,omitempty"`
 }
+
+// The values of Heartbeat.Docker.
+const (
+	DockerNone     = "none"      // no socket, nothing answers on it, or not Linux
+	DockerNoAccess = "no_access" // the socket is there but this agent's user may not open it
+	DockerOK       = "ok"        // /_ping answered
+)
 
 // TypeVNCSet is server -> agent: start or stop the host's VNC server. There is no
 // reply: the next heartbeat shows the result in `vnc`.
@@ -347,4 +358,176 @@ const TypeVNCSet = "vnc_set"
 // from starting at boot; true sets it to start at boot and starts it now.
 type VNCSet struct {
 	Enabled bool `json:"enabled"`
+}
+
+// ---------------------------------------------------------------- Docker (M12, D-70)
+
+// KindDocker is the Docker tab's session (docs/protocol.md §4): JSON requests and
+// answers in text frames, like a files session. It needs the role of a shell,
+// because the Docker socket is root on the host.
+const KindDocker = "docker"
+
+// TypeDockerChange is what the agent reports, on the control connection, after it
+// tried to change something in a docker session, Docker's refusals included. It
+// plays the part file_change plays for the file manager (D-37): the relay does not
+// read the session, so the agent is the one that knows what was asked and what
+// Docker answered.
+const TypeDockerChange = "docker_change"
+
+// DockerChange says what one change did. It says WHAT happened and never WHO did
+// it: the server finds the person from SessionID. Command is the docker command
+// form of the change. Error is Docker's own message, only when OK is false.
+type DockerChange struct {
+	SessionID string `json:"session_id"`
+	Op        string `json:"op"`
+	Command   string `json:"command"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+}
+
+// The operations of a docker session. The first group only reads; the second
+// group changes something, and every one of those is reported as a DockerChange.
+const (
+	DockerOpContainers = "containers"
+	DockerOpInspect    = "inspect"
+	DockerOpLogs       = "logs"
+	DockerOpImages     = "images"
+	DockerOpVolumes    = "volumes"
+	DockerOpNetworks   = "networks"
+	DockerOpStacks     = "stacks"
+
+	DockerOpStart       = "start"
+	DockerOpStop        = "stop"
+	DockerOpRestart     = "restart"
+	DockerOpRemove      = "remove"
+	DockerOpRemoveImage = "remove_image"
+	DockerOpPrune       = "prune"
+	DockerOpStack       = "stack"
+)
+
+// IsDockerChange says whether an operation of a docker session changes something
+// (and so is reported and audited). The server uses it on what an agent reports,
+// the agent on what it ran.
+func IsDockerChange(op string) bool {
+	switch op {
+	case DockerOpStart, DockerOpStop, DockerOpRestart, DockerOpRemove,
+		DockerOpRemoveImage, DockerOpPrune, DockerOpStack:
+		return true
+	}
+	return false
+}
+
+// DockerRequest is one request. Which fields are used depends on Op. There is no
+// "force" field on purpose: nothing is ever forced (D-70).
+type DockerRequest struct {
+	ID        int64  `json:"id"`
+	Op        string `json:"op"`
+	Container string `json:"container,omitempty"` // inspect, logs, start, stop, restart, remove: a name or an id
+	Image     string `json:"image,omitempty"`     // remove_image: sha256:<64 hex>, or the 64 hex alone
+	Tail      int    `json:"tail,omitempty"`      // logs: how many lines, 1 to 2000 (default 200)
+	What      string `json:"what,omitempty"`      // prune: containers, images or build_cache
+	All       bool   `json:"all,omitempty"`       // prune images: every image no container uses, not only dangling ones
+	Project   string `json:"project,omitempty"`   // stack: the name of a stack that exists
+	Action    string `json:"action,omitempty"`    // stack: down, up, restart or recycle
+	Volumes   bool   `json:"volumes,omitempty"`   // stack down or recycle: also delete named volumes (-v)
+}
+
+// The words of DockerRequest.What and DockerRequest.Action.
+const (
+	DockerPruneContainers = "containers"
+	DockerPruneImages     = "images"
+	DockerPruneBuildCache = "build_cache"
+
+	DockerStackDown    = "down"
+	DockerStackUp      = "up"
+	DockerStackRestart = "restart"
+	DockerStackRecycle = "recycle" // down, then up -d
+)
+
+// DockerContainer is one line of `docker ps -a`.
+type DockerContainer struct {
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Image    string    `json:"image"`
+	ImageID  string    `json:"image_id"`
+	State    string    `json:"state"`  // running, exited, ...
+	Status   string    `json:"status"` // "Up 3 hours"
+	Created  time.Time `json:"created"`
+	Ports    []string  `json:"ports"`
+	Project  string    `json:"project"`  // the Compose project, "" if Compose does not own it
+	Service  string    `json:"service"`  // the Compose service
+	Revision string    `json:"revision"` // the image's org.opencontainers.image.revision label: which commit runs here
+}
+
+// DockerImage is one line of `docker images`.
+type DockerImage struct {
+	ID       string    `json:"id"`
+	Tags     []string  `json:"tags"`
+	Size     int64     `json:"size"`
+	Created  time.Time `json:"created"`
+	UsedBy   []string  `json:"used_by"` // names of the containers that use it
+	Dangling bool      `json:"dangling"`
+}
+
+// DockerVolume is one line of `docker volume ls`.
+type DockerVolume struct {
+	Name       string   `json:"name"`
+	Driver     string   `json:"driver"`
+	Mountpoint string   `json:"mountpoint"`
+	Anonymous  bool     `json:"anonymous"` // its name is 64 hex characters: Docker made it, nobody named it
+	UsedBy     []string `json:"used_by"`
+	Project    string   `json:"project"`
+}
+
+// DockerNetworkMember is a container on a network.
+type DockerNetworkMember struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
+// DockerNetwork is one line of `docker network ls`, with who is on it.
+type DockerNetwork struct {
+	ID         string                `json:"id"`
+	Name       string                `json:"name"`
+	Driver     string                `json:"driver"`
+	Scope      string                `json:"scope"`
+	Containers []DockerNetworkMember `json:"containers"`
+}
+
+// DockerStack is a Compose project, found from the labels of its containers.
+// Command is the start of the docker compose command that acts on it, so the page
+// can show what a button will run.
+type DockerStack struct {
+	Project      string   `json:"project"`
+	WorkingDir   string   `json:"working_dir"`
+	ConfigFiles  []string `json:"config_files"`
+	MissingFiles []string `json:"missing_files"` // config files that no longer exist on the host
+	Services     []string `json:"services"`
+	Containers   []string `json:"containers"`
+	Running      int      `json:"running"`
+	Total        int      `json:"total"`
+	Command      string   `json:"command"`
+}
+
+// DockerResponse answers the request with the same ID. When OK is false, Error is
+// Docker's own message (or the agent's reason). Command is the docker command that
+// was done or tried, in every answer that got as far as knowing it.
+type DockerResponse struct {
+	ID      int64  `json:"id"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	Command string `json:"command,omitempty"`
+
+	Containers []DockerContainer `json:"containers,omitempty"`
+	Inspect    json.RawMessage   `json:"inspect,omitempty"`
+	Logs       string            `json:"logs,omitempty"`
+	Truncated  bool              `json:"truncated,omitempty"` // logs: the beginning was cut to fit
+	Images     []DockerImage     `json:"images,omitempty"`
+	Volumes    []DockerVolume    `json:"volumes,omitempty"`
+	Networks   []DockerNetwork   `json:"networks,omitempty"`
+	Stacks     []DockerStack     `json:"stacks,omitempty"`
+
+	Removed        []string `json:"removed,omitempty"`         // remove_image, prune: what Docker says it removed
+	SpaceReclaimed uint64   `json:"space_reclaimed,omitempty"` // prune, in bytes
+	Output         string   `json:"output,omitempty"`          // stack: the last lines of docker compose's output
 }

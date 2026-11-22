@@ -65,7 +65,7 @@ var auditActions = map[string]string{
 // The log trusts what the agent says about the change itself. That is accepted:
 // an agent that lies is already in control of its own machine.
 func (s *Server) recordFileChange(agentID string, c protocol.FileChange) {
-	userID, ownerAgent, ok := s.sessions.filesOwner(c.SessionID)
+	userID, ownerAgent, ok := s.sessions.changeOwner(c.SessionID, protocol.KindFiles)
 	if !ok || ownerAgent != agentID {
 		// Same answer for "no such session" and "somebody else's": no hints.
 		slog.Warn("dropped a file change report for an unknown session", "agent_id", agentID, "session", c.SessionID)
@@ -95,6 +95,33 @@ func (s *Server) recordFileChange(agentID string, c protocol.FileChange) {
 		detail += " FAILED: " + clip(auditText(c.Error), maxAuditError)
 	}
 	s.audit(userID, agentID, action, detail)
+}
+
+// maxAuditCommand caps the docker command an agent can put in an audit line. A
+// stack action names the compose files, so it is longer than an error.
+const maxAuditCommand = 400
+
+// recordDockerChange writes the audit line for one change an agent reported from a
+// docker session (D-70), exactly as recordFileChange does for files: the person
+// comes from the session record, and the report is dropped unless that session was
+// a docker session opened on the very agent that is reporting. Docker's refusals
+// are reported too, and are audited as FAILED with Docker's own message.
+func (s *Server) recordDockerChange(agentID string, c protocol.DockerChange) {
+	userID, ownerAgent, ok := s.sessions.changeOwner(c.SessionID, protocol.KindDocker)
+	if !ok || ownerAgent != agentID {
+		// Same answer for "no such session" and "somebody else's": no hints.
+		slog.Warn("dropped a docker change report for an unknown session", "agent_id", agentID, "session", c.SessionID)
+		return
+	}
+	if !protocol.IsDockerChange(c.Op) {
+		slog.Warn("dropped a docker change report with an unknown operation", "agent_id", agentID, "op", c.Op)
+		return
+	}
+	detail := "command=" + clip(auditText(c.Command), maxAuditCommand)
+	if !c.OK {
+		detail += " FAILED: " + clip(auditText(c.Error), maxAuditError)
+	}
+	s.audit(userID, agentID, "docker_"+c.Op, detail)
 }
 
 // clip shortens s to at most max characters, without cutting one in half.

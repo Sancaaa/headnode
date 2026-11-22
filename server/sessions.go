@@ -47,19 +47,28 @@ type session struct {
 	expired     bool // nobody paired it in time
 }
 
-// finishedKeepFor is how long the owner of an ended files session is
-// remembered. A files session reports its changes on the agent's control
+// finishedKeepFor is how long the owner of an ended files or docker session is
+// remembered. These sessions report their changes on the agent's control
 // connection, a different TCP connection from the one the relay uses, so the
 // last report can arrive a moment after the browser left and the session was
 // removed. A few minutes is far more than that race needs, and short enough that
 // the map stays tiny.
 const finishedKeepFor = 5 * time.Minute
 
-// finishedSession is all that is kept of an ended files session: who it was
-// for and which host it was on, so a late change report is still attributed.
+// reportsChanges says whether sessions of this kind report their changes to the
+// server (file_change, docker_change), so the server must remember who they were
+// opened for. No other kind reports anything.
+func reportsChanges(kind string) bool {
+	return kind == protocol.KindFiles || kind == protocol.KindDocker
+}
+
+// finishedSession is all that is kept of an ended files or docker session: who it
+// was for, which host it was on and what kind it was, so a late change report is
+// still attributed.
 type finishedSession struct {
 	userID  int64
 	agentID string
+	kind    string
 	at      time.Time // when it ended
 }
 
@@ -67,7 +76,7 @@ type finishedSession struct {
 type sessionTable struct {
 	mu          sync.Mutex
 	byID        map[string]*session
-	finished    map[string]finishedSession // files sessions only, for finishedKeepFor
+	finished    map[string]finishedSession // files and docker sessions only, for finishedKeepFor
 	pairTimeout time.Duration              // a field so tests can use a short one
 	keepFor     time.Duration              // a field so tests can use a short one
 }
@@ -141,14 +150,14 @@ func (t *sessionTable) get(id string) *session {
 func (t *sessionTable) end(sess *session) {
 	t.mu.Lock()
 	delete(t.byID, sess.id)
-	if sess.kind == protocol.KindFiles {
+	if reportsChanges(sess.kind) {
 		t.rememberLocked(sess)
 	}
 	t.mu.Unlock()
 	sess.endOnce.Do(func() { close(sess.done) })
 }
 
-// rememberLocked keeps the owner of an ended files session (see
+// rememberLocked keeps the owner of an ended files or docker session (see
 // finishedKeepFor), and drops the ones that have been kept long enough. The
 // cleanup happens here, on insert, like a plain "sweep when adding": no timer
 // and no background goroutine, and the map cannot grow without bound because
@@ -160,19 +169,20 @@ func (t *sessionTable) rememberLocked(sess *session) {
 			delete(t.finished, id)
 		}
 	}
-	t.finished[sess.id] = finishedSession{userID: sess.userID, agentID: sess.agentID, at: now}
+	t.finished[sess.id] = finishedSession{userID: sess.userID, agentID: sess.agentID, kind: sess.kind, at: now}
 }
 
-// filesOwner says who a files session was opened for and on which host, whether
-// it is still running or ended a moment ago. Only files sessions are known: no
-// other kind reports changes, so a report that names one is bogus.
-func (t *sessionTable) filesOwner(id string) (userID int64, agentID string, ok bool) {
+// changeOwner says who a session of the given kind (files or docker) was opened
+// for and on which host, whether it is still running or ended a moment ago. A
+// report that names a session of another kind is bogus: a files report about a
+// docker session, or anything about a shell, is not answered with an owner.
+func (t *sessionTable) changeOwner(id, kind string) (userID int64, agentID string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if sess := t.byID[id]; sess != nil {
-		return sess.userID, sess.agentID, sess.kind == protocol.KindFiles
+		return sess.userID, sess.agentID, sess.kind == kind
 	}
-	if old, found := t.finished[id]; found && time.Since(old.at) <= t.keepFor {
+	if old, found := t.finished[id]; found && old.kind == kind && time.Since(old.at) <= t.keepFor {
 		return old.userID, old.agentID, true
 	}
 	return 0, "", false
@@ -230,7 +240,7 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.Kind != protocol.KindShell && req.Kind != protocol.KindFiles && req.Kind != protocol.KindTunnel {
+	if req.Kind != protocol.KindShell && req.Kind != protocol.KindFiles && req.Kind != protocol.KindTunnel && req.Kind != protocol.KindDocker {
 		writeError(w, http.StatusBadRequest, "unsupported session kind")
 		return
 	}
@@ -303,6 +313,20 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		}
 		cols, rows := protocol.ClampSize(req.Params.Cols, req.Params.Rows)
 		kindParams = protocol.ShellParams{Cols: cols, Rows: rows}
+	case protocol.KindDocker:
+		// The Docker socket is root on the host: a container can mount "/", and even
+		// listing containers shows their environment. So this is as strong as a shell
+		// and needs the same role, and there is no read-only variant for a viewer (D-70).
+		allowed, err := s.can(u, hostID, actionShell)
+		if err != nil {
+			internalError(w, "check permission", err)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "you do not have permission to use Docker on this host")
+			return
+		}
+		kindParams = struct{}{} // the agent needs nothing from the browser
 	case protocol.KindFiles:
 		canRead, err := s.can(u, hostID, actionFilesRead)
 		if err != nil {
@@ -368,7 +392,7 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // actionFor is what a user needs to be allowed to attach to a session of this
-// kind. Anything unknown needs the strictest one.
+// kind. Anything unknown needs the strictest one, which is also what docker needs.
 func actionFor(kind string) action {
 	if kind == protocol.KindFiles || kind == protocol.KindDownload {
 		return actionFilesRead

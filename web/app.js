@@ -780,6 +780,10 @@ function hostTabs(host, active) {
     // the page you are on stays, so it does not vanish under you.
     hasScreen(host) || active === 'screen'
       ? h('a', { href: screenHref(host.id), class: active === 'screen' ? 'active' : null }, 'Screen')
+      : null,
+    // Only where the agent found a Docker Engine (D-70); the tab of the page you are on stays.
+    hasDocker(host) || active === 'docker'
+      ? h('a', { href: dockerHref(host.id), class: active === 'docker' ? 'active' : null }, 'Docker')
       : null);
 }
 
@@ -2371,6 +2375,460 @@ function mountFiles(host, box) {
   connect();
 }
 
+// ------------------------------------------------------------ Docker page
+
+function dockerHref(hostId) {
+  return hostLink(hostId) + '/docker';
+}
+
+// The Docker tab exists only where it can work (M12, D-70): the host is online, the
+// agent's heartbeat says it found a Docker Engine (`ok`) or found one it may not use
+// (`no_access`, and then the page says how to fix that), and this person may open a
+// shell (the Docker socket is root, so the server asks for the same role). A
+// Windows host has none, and an agent older than 0.12.0 sends no `docker` at all.
+function hasDocker(host) {
+  const state = host.heartbeat && host.heartbeat.docker;
+  return Boolean(host.online && host.can_shell && !isWindows(host) && (state === 'ok' || state === 'no_access'));
+}
+
+function renderDockerPage(host) {
+  document.title = host.name + ' · headnode';
+  const page = [
+    h('a', { class: 'back', href: '#/' }, '← Hosts'),
+    pageHead(host.name, null),
+    h('div', { class: 'status' }, statusText(host)),
+    hostTabs(host, 'docker'),
+  ];
+  const state = host.heartbeat && host.heartbeat.docker;
+  if (isWindows(host)) {
+    page.push(h('div', { class: 'notice' }, 'Docker is only supported on Linux hosts.'));
+  } else if (!host.online) {
+    page.push(h('div', { class: 'notice' },
+      'Host offline. Make sure the headnode-agent service is running on this host, then reload this page.'));
+  } else if (!host.can_shell) {
+    page.push(h('div', { class: 'notice' },
+      'Using Docker needs the same permission as a terminal (an operator of this host\'s group, or an administrator): ' +
+      'the Docker socket is root on the host.'));
+  } else if (state === 'no_access') {
+    page.push(h('div', { class: 'notice' },
+      'Docker is installed here, but the agent may not use it. Add the account the agent runs as (the User= line of its ' +
+      'systemd unit) to the docker group, then restart the agent:'),
+    h('pre', { class: 'docker-command' }, 'sudo usermod -aG docker <user>\nsudo systemctl restart headnode-agent'),
+    h('p', { class: 'sub' }, 'Membership of the docker group is root on that machine: a container can mount the whole disk. ' +
+      'On a host where you grant it, the agent is effectively root again. You decide that for each host.'));
+  } else if (state !== 'ok') {
+    page.push(h('div', { class: 'notice' },
+      'The agent found no Docker Engine on this host (or its agent is older than 0.12.0). ' +
+      'Install Docker and make sure it is running, then reload this page.'));
+  } else {
+    const box = h('div', { class: 'docker' });
+    page.push(box);
+    // Like the terminal and the file manager: built once, and never redrawn by the poll.
+    queueMicrotask(() => mountDocker(host, box));
+  }
+  return page;
+}
+
+// What a stack button will run, for the dialogs. The agent gives the start of the
+// command with the stack (`command`), built from the same labels it will use.
+function stackCommand(stack, action, volumes) {
+  const down = stack.command + ' down' + (volumes ? ' -v' : '');
+  const up = stack.command + ' up -d';
+  if (action === 'down') return down;
+  if (action === 'up') return up;
+  if (action === 'restart') return stack.command + ' restart';
+  return down + ' && ' + up; // "recycle": down, then up again
+}
+
+// The Docker tab talks to the agent over one session WebSocket, like the file manager:
+// a JSON request with an id, and an answer with the same id (protocol.md §4). Every
+// answer carries the docker command that was done or tried, and the page shows it.
+// Nothing here forces anything: when Docker refuses, its own words are shown.
+function mountDocker(host, box) {
+  let ws = null;
+  let disposed = false;
+  let nextId = 1;
+  const pending = new Map(); // request id -> { resolve, reject }
+  const data = { stacks: [], containers: [], images: [], volumes: [], networks: [] };
+
+  const message = h('div', { class: 'docker-message' });
+  const reconnect = h('button', { class: 'btn', type: 'button', hidden: '' }, 'Reconnect');
+  const bar = h('div', { class: 'docker-bar' },
+    iconButton('Refresh', ICON_REFRESH, () => reload()),
+    button('Prune…', 'btn', () => pruneDialog()),
+    reconnect);
+  const listing = h('div');
+  box.replaceChildren(bar, message, listing);
+
+  function request(op, fields) {
+    return new Promise((resolve, reject) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('Not connected.'));
+        return;
+      }
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, op, ...fields }));
+    });
+  }
+
+  // Never throws. The result has the shape api() gives, plus the whole answer in
+  // data, so a refusal still has its `command`.
+  async function attempt(op, fields) {
+    try {
+      const reply = await request(op, fields);
+      return { ok: Boolean(reply.ok), status: 0, data: reply };
+    } catch (err) {
+      return { ok: false, status: 0, data: { error: err.message } };
+    }
+  }
+
+  // Docker's own message, and the command that was tried.
+  function failureText(result) {
+    const command = result.data && result.data.command;
+    return errorText(result) + (command ? '   (tried: ' + command + ')' : '');
+  }
+
+  // The line under the buttons: what just happened, with its command.
+  function showMessage(text, command, bad, output) {
+    message.className = 'docker-message' + (bad ? ' danger-text' : ' sub');
+    message.replaceChildren(...[
+      text,
+      command ? h('code', { class: 'mono' }, ' ' + command) : null,
+      output ? h('pre', { class: 'docker-pre' }, output) : null,
+    ].filter((node) => node !== null));
+  }
+
+  // What every change does when Docker answered: a refusal stays in the dialog that
+  // asked, so it can be read; success closes the dialog, says what ran, and reloads.
+  function afterChange(result, doneText) {
+    if (!result.ok) return failureText(result);
+    showMessage(doneText || 'Done.', result.data.command, false, result.data.output);
+    reload();
+    return null;
+  }
+
+  async function reload() {
+    const ops = ['stacks', 'containers', 'images', 'volumes', 'networks'];
+    const results = await Promise.all(ops.map((op) => attempt(op)));
+    if (disposed) return;
+    const failed = results.find((result) => !result.ok);
+    if (failed) showMessage(failureText(failed), null, true);
+    ops.forEach((op, i) => {
+      if (results[i].ok) data[op] = results[i].data[op] || [];
+    });
+    if (results.some((result) => result.ok)) draw();
+  }
+
+  // ---- the tables (plain tables without boxes, design.md)
+
+  function section(title, note, content) {
+    return h('section', { class: 'docker-section' }, h('h2', {}, title), note ? h('p', { class: 'sub' }, note) : null, content);
+  }
+
+  function table(headers, rows, empty) {
+    if (rows.length === 0) return h('div', { class: 'empty small' }, empty);
+    return h('table', {},
+      h('thead', {}, h('tr', {}, headers.map((title) => h('th', { class: title === '' ? 'col-act' : null }, title)))),
+      h('tbody', {}, rows));
+  }
+
+  const row = (...cells) => h('tr', { class: 'static' }, cells);
+  const actions = (...buttons) => h('td', { class: 'col-act' }, h('div', { class: 'docker-actions' }, buttons));
+  const list = (items) => (items && items.length > 0 ? items.join(', ') : '—');
+
+  function draw() {
+    listing.replaceChildren(
+      section('Stacks', 'Compose projects, found from the labels of their containers.',
+        table(['Stack', 'Services', 'Containers', ''], data.stacks.map(stackRow), 'No Compose stacks.')),
+      section('Containers', null,
+        table(['Container', 'Image', 'State', 'Ports', ''], data.containers.map(containerRow), 'No containers.')),
+      section('Images', 'The biggest first.',
+        table(['Image', 'Size', 'Created', 'Used by', ''], data.images.map(imageRow), 'No images.')),
+      section('Volumes', null,
+        table(['Volume', 'Used by', 'Stack', 'Where'], data.volumes.map(volumeRow), 'No volumes.')),
+      section('Networks', 'Containers on the same network reach each other by name.',
+        table(['Network', 'Driver', 'Containers'], data.networks.map(networkRow), 'No networks.')));
+  }
+
+  function stackRow(stack) {
+    const missing = stack.missing_files && stack.missing_files.length > 0;
+    const buttons = [
+      button('Down', 'btn btn-small', () => stackDialog(stack, 'down')),
+      button('Up', 'btn btn-small', () => stackDialog(stack, 'up')),
+      button('Restart', 'btn btn-small', () => stackDialog(stack, 'restart')),
+      button('Down and up again', 'btn btn-small', () => stackDialog(stack, 'recycle')),
+    ];
+    // Without its compose file, Compose cannot act on the stack: say so instead of offering buttons that fail.
+    if (missing) buttons.forEach((b) => { b.disabled = true; });
+    return row(
+      h('td', {}, h('span', { class: 'name' }, stack.project),
+        h('div', { class: 'sub mono' }, stack.working_dir || ''),
+        missing ? h('div', { class: 'danger-text' }, 'The compose file ' + stack.missing_files[0] + ' no longer exists on this host.') : null),
+      h('td', {}, list(stack.services)),
+      h('td', {}, stack.running + ' of ' + stack.total + ' running'),
+      actions(buttons));
+  }
+
+  function containerRow(c) {
+    const running = c.state === 'running';
+    const buttons = [
+      button('Logs', 'btn btn-small', () => logsDialog(c)),
+      button('Inspect', 'btn btn-small', () => inspectDialog(c)),
+      running
+        ? button('Stop', 'btn btn-small', () => containerDialog(c, 'stop'))
+        : button('Start', 'btn btn-small', async () => { // harmless, so no dialog: the result shows on the line above
+          const result = await attempt('start', { container: c.name });
+          if (disposed) return;
+          if (result.ok) afterChange(result, 'Started.');
+          else showMessage(failureText(result), null, true);
+        }),
+      running ? button('Restart', 'btn btn-small', () => containerDialog(c, 'restart')) : null,
+      button('Remove', 'btn btn-small btn-danger-text', () => containerDialog(c, 'remove')),
+    ];
+    return row(
+      h('td', {}, h('span', { class: 'name' }, c.name),
+        c.project ? h('div', { class: 'sub' }, c.project + ' / ' + c.service) : null),
+      h('td', {}, h('span', { class: 'mono' }, c.image),
+        // Which commit runs here: the delivery question of the course.
+        c.revision ? h('div', { class: 'sub mono', title: c.revision }, 'commit ' + c.revision.slice(0, 7)) : null),
+      h('td', {}, running ? h('span', {}, h('span', { class: 'dot' }), 'running') : h('span', { class: 'sub' }, c.state),
+        h('div', { class: 'sub' }, c.status)),
+      h('td', { class: 'mono' }, list(c.ports)),
+      actions(buttons));
+  }
+
+  function imageRow(img) {
+    const name = img.tags && img.tags.length > 0 ? img.tags.join(', ') : '<none> (' + img.id.replace('sha256:', '').slice(0, 12) + ')';
+    return row(
+      h('td', { class: 'mono' }, name, img.dangling ? h('span', { class: 'tag' }, 'dangling') : null),
+      h('td', {}, formatBytes(img.size)),
+      h('td', { class: 'sub' }, relativeTime(img.created)),
+      h('td', {}, list(img.used_by)),
+      actions(button('Remove', 'btn btn-small btn-danger-text', () => imageDialog(img, name))));
+  }
+
+  function volumeRow(vol) {
+    return row(
+      h('td', {}, h('span', { class: 'mono' }, vol.anonymous ? vol.name.slice(0, 12) + '…' : vol.name),
+        h('span', { class: 'tag' }, vol.anonymous ? 'anonymous' : 'named')),
+      h('td', {}, list(vol.used_by)),
+      h('td', {}, vol.project || '—'),
+      h('td', { class: 'sub mono' }, vol.mountpoint));
+  }
+
+  function networkRow(net) {
+    const members = (net.containers || []).map((m) => m.name + (m.address ? ' (' + m.address + ')' : ''));
+    return row(h('td', {}, h('span', { class: 'name' }, net.name)), h('td', {}, net.driver), h('td', {}, list(members)));
+  }
+
+  // ---- dialogs: each shows the command it will run, and names the object
+
+  const commandLine = (command) => h('pre', { class: 'docker-command' }, '$ ' + command);
+
+  function commandDialog({ title, text, command, confirmLabel, danger, op, fields, doneText }) {
+    openDialog({
+      title,
+      danger,
+      submitLabel: confirmLabel,
+      fields: [h('p', {}, text), commandLine(command)],
+      onSubmit: async () => afterChange(await attempt(op, fields), doneText),
+    });
+  }
+
+  function containerDialog(c, op) {
+    const texts = {
+      stop: 'Stop the container "' + c.name + '"? Docker asks it to stop and kills it after 10 seconds.',
+      restart: 'Restart the container "' + c.name + '"?',
+      remove: 'Remove the container "' + c.name + '"? Its own filesystem is deleted. Its anonymous volumes are not (no -v), ' +
+        'and nothing is forced: Docker refuses to remove a running container, so stop it first.',
+    };
+    const labels = { stop: 'Stop', restart: 'Restart', remove: 'Remove' };
+    commandDialog({
+      title: labels[op] + ' ' + c.name, text: texts[op], command: 'docker ' + (op === 'remove' ? 'rm' : op) + ' ' + c.name,
+      confirmLabel: labels[op], danger: op === 'remove', op, fields: { container: c.name },
+      doneText: { stop: 'Stopped.', restart: 'Restarted.', remove: 'Removed.' }[op],
+    });
+  }
+
+  function imageDialog(img, name) {
+    commandDialog({
+      title: 'Remove image ' + name,
+      text: 'Remove the image "' + name + '" (' + formatBytes(img.size) + ')? Nothing is forced: Docker refuses an image that a container ' +
+        'uses, or one with several tags, and says so.',
+      command: 'docker rmi ' + img.id, confirmLabel: 'Remove image', danger: true,
+      op: 'remove_image', fields: { image: img.id }, doneText: 'Removed.',
+    });
+  }
+
+  function stackDialog(stack, action) {
+    const volumesBox = h('input', { type: 'checkbox' });
+    const volumesRow = h('label', { class: 'check' }, volumesBox,
+      'Also delete the stack\'s named volumes (-v). Their data is lost.');
+    volumesRow.hidden = action !== 'down' && action !== 'recycle';
+    const preview = h('pre', { class: 'docker-command' });
+    const wantsVolumes = () => !volumesRow.hidden && volumesBox.checked;
+    const update = () => { preview.textContent = '$ ' + stackCommand(stack, action, wantsVolumes()); };
+    volumesBox.addEventListener('change', update);
+    update();
+
+    const texts = {
+      down: 'Stop and remove the containers and networks of "' + stack.project + '". Named volumes keep their data unless you tick the box.',
+      up: 'Create and start the containers of "' + stack.project + '" from its compose file.',
+      restart: 'Restart the containers of "' + stack.project + '".',
+      recycle: 'Take "' + stack.project + '" down and bring it up again. Data in a named volume survives, unless you tick the box: ' +
+        'that is the test the box is for.',
+    };
+    const labels = { down: 'Down', up: 'Up', restart: 'Restart', recycle: 'Down and up again' };
+    openDialog({
+      title: labels[action] + ': ' + stack.project,
+      danger: action === 'down' || action === 'recycle',
+      submitLabel: labels[action],
+      fields: [h('p', {}, texts[action]), volumesRow, preview],
+      onSubmit: async () => afterChange(await attempt('stack', { project: stack.project, action, volumes: wantsVolumes() })),
+    });
+  }
+
+  function pruneDialog() {
+    const what = h('select', { class: 'input' },
+      h('option', { value: 'containers' }, 'Stopped containers'),
+      h('option', { value: 'images' }, 'Unused images'),
+      h('option', { value: 'build_cache' }, 'Build cache'));
+    const allBox = h('input', { type: 'checkbox' });
+    const allRow = h('label', { class: 'check' }, allBox,
+      'Every image that no container uses, not only the dangling ones (layers with no tag)');
+    const explain = h('p', {});
+    const preview = h('pre', { class: 'docker-command' });
+    const update = () => {
+      allRow.hidden = what.value !== 'images';
+      const all = what.value === 'images' && allBox.checked;
+      explain.textContent = {
+        containers: 'Removes every container that is stopped.',
+        images: all ? 'Removes EVERY image that no container uses, tagged or not.' : 'Removes dangling images: layers with no tag, left by rebuilds.',
+        build_cache: 'Removes the build cache.',
+      }[what.value];
+      preview.textContent = '$ ' + {
+        containers: 'docker container prune -f',
+        images: all ? 'docker image prune -a -f' : 'docker image prune -f',
+        build_cache: 'docker builder prune -f',
+      }[what.value];
+    };
+    what.addEventListener('change', update);
+    allBox.addEventListener('change', update);
+    update();
+
+    openDialog({
+      title: 'Prune',
+      danger: true,
+      submitLabel: 'Prune',
+      fields: [field('What to remove', what), allRow, explain, preview],
+      onSubmit: async () => {
+        const result = await attempt('prune', { what: what.value, all: what.value === 'images' && allBox.checked });
+        if (!result.ok) return failureText(result);
+        const removed = (result.data.removed || []).length;
+        showMessage('Removed ' + count(removed, 'item', 'items') + ', reclaimed ' + formatBytes(result.data.space_reclaimed || 0) + '.', result.data.command, false);
+        reload();
+        return null;
+      },
+    });
+  }
+
+  // Logs and Inspect are reads: a window with the text and the command behind it.
+  function textDialog({ title, load, toolbar }) {
+    const command = h('pre', { class: 'docker-command' });
+    const pre = h('pre', { class: 'docker-pre' }, 'Loading…');
+    const run = async () => {
+      const result = await load();
+      if (disposed) return;
+      command.textContent = '$ ' + ((result.data && result.data.command) || '');
+      pre.textContent = result.ok ? result.text : errorText(result);
+      pre.scrollTop = pre.scrollHeight; // logs: the newest line is at the bottom
+    };
+    openDialog({
+      title, wide: true, cancelLabel: null, submitLabel: 'Close',
+      fields: [toolbar ? toolbar(run) : null, command, pre],
+      onSubmit: async () => null,
+    });
+    run();
+  }
+
+  function logsDialog(c) {
+    const tail = h('select', { class: 'input input-small' },
+      [100, 200, 500, 2000].map((n) => h('option', { value: String(n), selected: n === 200 ? '' : null }, 'Last ' + n + ' lines')));
+    textDialog({
+      title: 'Logs of ' + c.name,
+      toolbar: (run) => {
+        tail.addEventListener('change', run);
+        return h('div', { class: 'docker-toolbar' }, tail, button('Refresh', 'btn', run));
+      },
+      load: async () => {
+        const result = await attempt('logs', { container: c.name, tail: Number(tail.value) });
+        if (result.ok) {
+          result.text = (result.data.logs || '(no output)') + (result.data.truncated ? '\n… (the beginning was cut to fit)' : '');
+        }
+        return result;
+      },
+    });
+  }
+
+  function inspectDialog(c) {
+    textDialog({
+      title: 'Inspect ' + c.name,
+      load: async () => {
+        const result = await attempt('inspect', { container: c.name });
+        if (result.ok) result.text = '// environment values are hidden\n' + JSON.stringify(result.data.inspect, null, 2);
+        return result;
+      },
+    });
+  }
+
+  // ---- the session
+
+  async function connect() {
+    reconnect.hidden = true;
+    showMessage('Connecting…', null, false);
+    const result = await api('POST', '/api/hosts/' + host.id + '/sessions', { kind: 'docker', params: {} });
+    if (disposed) return;
+    if (!result.ok) {
+      showMessage(errorText(result), null, true);
+      reconnect.hidden = false;
+      return;
+    }
+    ws = openSocket(result.data.id);
+    ws.onmessage = (event) => {
+      if (typeof event.data !== 'string') return;
+      let reply;
+      try { reply = JSON.parse(event.data); } catch (err) { return; }
+      const waiting = pending.get(reply.id);
+      if (!waiting) return;
+      pending.delete(reply.id);
+      waiting.resolve(reply);
+    };
+    ws.onopen = () => {
+      showMessage('', null, false);
+      reload();
+    };
+    ws.onclose = () => {
+      if (disposed) return;
+      for (const waiting of pending.values()) waiting.reject(new Error('Not connected.'));
+      pending.clear();
+      showMessage('Not connected.', null, true);
+      reconnect.hidden = false;
+    };
+  }
+  reconnect.addEventListener('click', connect);
+
+  pageSession = {
+    dispose() {
+      disposed = true;
+      for (const waiting of pending.values()) waiting.reject(new Error('Not connected.'));
+      pending.clear();
+      if (ws) ws.close(1000);
+    },
+  };
+  connect();
+}
+
 // ------------------------------------------------------------- Users page
 
 // The one picture every user has (D-69): there is no upload, so the same file is
@@ -2774,12 +3232,19 @@ const AUDIT_LABELS = {
   file_write: 'File edited',
   transfer_start: 'File send started',
   transfer_result: 'File send result',
+  docker_start: 'Container started',
+  docker_stop: 'Container stopped',
+  docker_restart: 'Container restarted',
+  docker_remove: 'Container removed',
+  docker_remove_image: 'Image removed',
+  docker_prune: 'Docker pruned',
+  docker_stack: 'Compose stack changed',
 };
 
 // What a session is called in the log. The server writes the same two actions
 // (session_open, session_close) for every kind of session and puts the kind in
 // the detail ("kind=files readonly=false"), so the page reads it from there.
-const SESSION_KIND_NAMES = { shell: 'Terminal', files: 'Files', tunnel: 'Tunnel' };
+const SESSION_KIND_NAMES = { shell: 'Terminal', files: 'Files', tunnel: 'Tunnel', docker: 'Docker' };
 
 function auditLabel(e) {
   if (e.action === 'session_open' || e.action === 'session_close') {
@@ -3300,6 +3765,7 @@ const routes = [
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/terminal$/, url: (m) => '/api/hosts/' + m[1], render: renderTerminalPage, nav: '#/', title: 'Terminal', static: true },
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/files$/, url: (m) => '/api/hosts/' + m[1], render: renderFilesPage, nav: '#/', title: 'Files', static: true },
   { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/screen$/, url: (m) => '/api/hosts/' + m[1], render: renderScreenPage, nav: '#/', title: 'Screen', static: true },
+  { pattern: /^#\/hosts\/([A-Za-z0-9_]+)\/docker$/, url: (m) => '/api/hosts/' + m[1], render: renderDockerPage, nav: '#/', title: 'Docker', static: true },
   { pattern: /^#\/users$/, url: () => '/api/users', render: renderUsers, nav: '#/users', title: 'Users' },
   // static: it holds forms, which the 2-second poll must not redraw while someone types.
   { pattern: /^#\/profile$/, url: () => '/api/me', render: renderProfile, nav: '', title: 'Profile', static: true },

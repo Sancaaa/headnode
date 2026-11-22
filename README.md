@@ -24,6 +24,7 @@ The agent opens the connection to the server, not the other way around. That is 
 | Open a terminal on a Linux host | Terminal tab (full screen available) |
 | Browse, edit, upload and download files; send files or folders to many hosts | Files tab, Transfers |
 | See and control a host's screen, with zoom and pan for several monitors | Screen tab: noVNC through the agent's tunnel; the host's VNC server is switched on and off from the page |
+| See and manage a Linux host's Docker: containers, Compose stacks, images, volumes, networks, logs; with the `docker` command behind every button | Docker tab (only where Docker is installed). **Security note:** membership of the `docker` group is root on that machine, so on a host where the agent's user is in that group, the agent is effectively root again (see D-48 and D-70); you decide that per host |
 | Forward a port from your laptop to a host (`ssh`, RDP, ...) | `hnctl forward` |
 | Add a host with one command | Hosts, Add host: a `curl ... \| sh` line for Linux, a PowerShell line for Windows |
 | Know which agents are out of date, and update them | An **Update available** tag on the Hosts page, with how to update that host: `sudo headnode update` on Linux, the tray icon's **Update headnode…** on Windows (the agent updates itself; you choose when) |

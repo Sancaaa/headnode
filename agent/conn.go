@@ -27,10 +27,11 @@ import (
 // credentials never sent, the tray status in the registry, VNC passwords), and 0.11.0
 // the agent's own `update` command, `sudo headnode update` on Linux and the tray's Update
 // headnode… on Windows (D-67), and 0.11.1 the tray's version line and its Update item
-// that can be pressed only when an update exists (D-68): an older
+// that can be pressed only when an update exists (D-68), and 0.12.0 the `docker`
+// session and the `docker` flag in the heartbeat (D-70): an older
 // agent ignores the command, stays silent or answers "unknown operation", so the
 // version is how a person can tell whether a host is up to date.
-const Version = "0.11.1"
+const Version = "0.12.0"
 
 const (
 	heartbeatInterval = 20 * time.Second
@@ -207,6 +208,7 @@ func heartbeatLoop(ctx context.Context, cfg Config, conn *websocket.Conn) error 
 		if hb.VNC {
 			hb.VNCPassword = vncPassword() // for the server alone, never shown in a host list (D-64)
 		}
+		hb.Docker = dockerStatusAt(dockerSocket) // a /_ping with a one-second limit, so the Docker tab only exists where it can work (D-70)
 		if err := send(connCtx, conn, protocol.TypeHeartbeat, hb); err != nil {
 			return err
 		}

@@ -307,6 +307,13 @@ func (s *Server) handleControlMessage(agentID string, me *onlineAgent, data []by
 			return
 		}
 		s.recordFileChange(agentID, change)
+	case protocol.TypeDockerChange:
+		var change protocol.DockerChange
+		if err := json.Unmarshal(env.Data, &change); err != nil {
+			slog.Warn("bad docker change report", "agent_id", agentID, "err", err)
+			return
+		}
+		s.recordDockerChange(agentID, change)
 	default:
 		slog.Warn("unknown control message", "agent_id", agentID, "type", env.Type)
 	}

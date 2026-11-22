@@ -166,7 +166,8 @@ Spacing scale (multiples of 4px): **4 · 8 · 12 · 16 · 24 · 32 · 40**.
 | Page | Contents | Milestone |
 |---|---|---|
 | **Hosts** | Count pill, search, table: Host · Addresses (LAN + WAN) · Usage · Status · Action (Shell) | M1 / M3 |
-| **Host detail** | Header (name, status, tags) + tabs: *Overview* (info + usage), *Terminal*, *Files* | M1 / M3 / M4 |
+| **Host detail** | Header (name, status, tags) + tabs: *Overview* (info + usage), *Terminal*, *Files*, *Screen*, *Docker* | M1 / M3 / M4 / M12 |
+| **Docker** (a tab of the host) | Shown only when the host is online, the agent reports `docker` as `ok` or `no_access`, and the user may open a shell. Sections as plain tables without boxes: **Stacks** (Down / Up / Restart / Down and up again), **Containers** (name, image and the commit it was built from, state, ports; Logs, Inspect, Start or Stop, Restart, Remove), **Images** (biggest first; Remove), **Volumes** (named or anonymous, used by), **Networks** (who can reach whom by name). **Prune…** in the page's bar opens one dialog with its three kinds. Every confirm dialog shows the `docker` command it will run and names the object; every result shows the command that ran. A refusal stays in the dialog that asked, in Docker's own words, with the command that was tried. There is no "force" anywhere. With `no_access` the tab shows the fix instead (`sudo usermod -aG docker <user>`, then restart the agent). | M12 |
 | **Add host** | Dialog: pick a group → install command in a code block + copy | M2 |
 | **Transfers** | Upload a file → pick hosts & path → status per host | M4 |
 | **Uploads** (admin) | Table: uploaded · file (with size) · by · Delete. Delete asks for confirmation and names the file; a file a transfer is still using shows "In use" instead. | M5.5 |

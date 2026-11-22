@@ -66,6 +66,8 @@ func serveSession(ctx context.Context, cfg Config, control *websocket.Conn, open
 		return runDownload(ctx, conn, open.Params)
 	case protocol.KindTunnel:
 		return runTunnel(ctx, conn, open.Params)
+	case protocol.KindDocker:
+		return runDocker(ctx, conn, dockerSocket, dockerReporter(ctx, control, open.SessionID))
 	default:
 		// Even a session that cannot be served still dials and then closes
 		// with the reason, so the browser shows a clear message instead of
