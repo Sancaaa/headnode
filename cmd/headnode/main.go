@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"headnode/server"
@@ -56,6 +60,9 @@ func serve(args []string) {
 		log.Fatal(err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	httpServer := &http.Server{
 		Addr:    *addr,
 		Handler: srv.Handler(),
@@ -63,8 +70,30 @@ func serve(args []string) {
 		// request headers holds that connection open forever.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("headnode listening on http://%s", *addr)
-	log.Fatal(httpServer.ListenAndServe())
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("headnode listening on http://%s", *addr)
+		errCh <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			db.Close()
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			db.Close()
+			log.Fatal(err)
+		}
+	}
 }
 
 func tokenCommand(args []string) {

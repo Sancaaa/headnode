@@ -27,6 +27,23 @@ func TestNewDatabaseGetsEveryMigration(t *testing.T) {
 	if _, err := db.Exec(`UPDATE agents SET wan_addr = ''`); err != nil {
 		t.Errorf("wan_addr column missing: %v", err)
 	}
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("MaxOpenConnections = %d, want 1", got)
+	}
+	for _, idx := range []string{
+		"idx_web_sessions_user_id",
+		"idx_web_sessions_expires_at",
+		"idx_agents_group_id",
+		"idx_group_members_group_id",
+		"idx_files_sha256",
+		"idx_audit_log_at",
+	} {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`, idx).Scan(&name)
+		if err != nil {
+			t.Errorf("index %s missing: %v", idx, err)
+		}
+	}
 }
 
 // The case this exists for: a database from before migrations (made from

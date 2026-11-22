@@ -54,10 +54,15 @@ func newProgramPath(exe string) string {
 	return strings.TrimSuffix(exe, ext) + ".new" + ext
 }
 
+// onUpdateResult records the outcome of Update (Windows registry; no-op on unix).
+// A variable so tests can observe it without touching the registry.
+var onUpdateResult = recordUpdateResult
+
 // Update replaces the running program with the newest one on the server named in the
 // credentials file at configPath. With force it does so even if the server has the
 // same version. What it says goes to out.
-func Update(configPath string, force bool, out io.Writer) error {
+func Update(configPath string, force bool, out io.Writer) (err error) {
+	defer func() { onUpdateResult(err) }()
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return err
@@ -160,10 +165,7 @@ func parseChecksum(sumsText, name string) (string, error) {
 		if file != name {
 			continue
 		}
-		if len(digest) != sha256.Size*2 {
-			return "", fmt.Errorf("invalid SHA-256 checksum for %s in SHA256SUMS", name)
-		}
-		if _, err := hex.DecodeString(digest); err != nil {
+		if _, err := hex.DecodeString(digest); err != nil || len(digest) != sha256.Size*2 {
 			return "", fmt.Errorf("invalid SHA-256 checksum for %s in SHA256SUMS", name)
 		}
 		if found != "" {

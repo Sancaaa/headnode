@@ -46,5 +46,5 @@ func swapProgram(exe, newPath string, out io.Writer) error {
 	return nil
 }
 
-// writeUpdateResult is for the Windows tray icon, which cannot see this window's output.
-func writeUpdateResult(err error) {}
+// recordUpdateResult is a no-op on Unix (only the Windows tray icon reads the registry).
+func recordUpdateResult(err error) {}

@@ -26,6 +26,9 @@ func checkCanUpdate() error {
 	return nil
 }
 
+// recordUpdateResult writes the outcome of Update to the registry for the tray icon.
+func recordUpdateResult(err error) { writeUpdateResult(err) }
+
 // swapProgram stops the service, puts the new program in place, starts the service, and
 // brings the tray icon back. Windows will not overwrite or delete a program that is
 // running, but it lets one be renamed: the old one is moved aside, the new one takes its
@@ -33,8 +36,6 @@ func checkCanUpdate() error {
 // is the one being replaced, so it may stay until the next update). If a step fails the
 // service is started again, so the host is not left off.
 func swapProgram(exe, newPath string, out io.Writer) (err error) {
-	defer func() { writeUpdateResult(err) }()
-
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("%w (%v)", errNotAdmin, err)

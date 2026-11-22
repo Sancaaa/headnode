@@ -39,6 +39,14 @@ var migrations = []string{
 	`ALTER TABLE web_sessions ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE web_sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'browser'`,
 	`ALTER TABLE web_sessions ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
+
+	// Indexes for hot lookups and foreign-key cascades.
+	`CREATE INDEX IF NOT EXISTS idx_web_sessions_user_id ON web_sessions(user_id);
+	 CREATE INDEX IF NOT EXISTS idx_web_sessions_expires_at ON web_sessions(expires_at);
+	 CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
+	 CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
+	 CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);
+	 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);`,
 }
 
 // migrate brings the database up to date. It runs every time the server (or a

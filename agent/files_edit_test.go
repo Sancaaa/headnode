@@ -214,3 +214,37 @@ func TestWriteIsReportedWithItsSizeAndNeverItsText(t *testing.T) {
 		t.Errorf("read reports = %+v, want none", reports)
 	}
 }
+
+func TestWriteTextAtomicLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "app.conf")
+	write(t, file, "v1")
+	v1 := readOf(t, false, file).Version
+
+	r := writeOf(t, false, file, "v2", v1)
+	if !r.OK {
+		t.Fatalf("write: %+v", r)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "app.conf" {
+		t.Errorf("directory entries after atomic write = %v, want only app.conf", entries)
+	}
+
+	// Through a symlink, the target is updated atomically and the symlink stays a symlink.
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink(file, link); err == nil {
+		r2 := writeOf(t, false, link, "v3", r.Version)
+		if !r2.OK {
+			t.Fatalf("write via symlink: %+v", r2)
+		}
+		if got, _ := os.ReadFile(file); string(got) != "v3" {
+			t.Errorf("target content = %q, want v3", got)
+		}
+		if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("symlink was replaced instead of kept: %v, %v", info, err)
+		}
+	}
+}

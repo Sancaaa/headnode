@@ -551,7 +551,11 @@ select.input { padding-right: 8px; }
 .docker-log-filter { flex: 1 1 180px; min-width: 160px; max-width: 280px; }
 
 @media (max-width: 1024px) {
-  .sidebar { display: none; }
+  .app { flex-direction: column; }
+  .sidebar { position: static; width: auto; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .nav { flex-direction: row; flex-wrap: wrap; padding-bottom: 8px; }
+  .nav-label { display: none; }
+  .menu.user-menu { top: 100%; bottom: auto; margin: 4px 0 0; }
   .main { padding: 24px; }
 }
 @media (max-width: 768px) {

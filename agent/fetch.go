@@ -8,17 +8,36 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
 	"headnode/protocol"
 )
+
+// fetchClient bounds connection setup and header waits so a stalled peer cannot
+// hang a transfer forever, while leaving Client.Timeout unset so multi-GB
+// transfers on slow links can finish.
+var fetchClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 var (
 	errBadMode     = errors.New("mode must be at most 0777")
@@ -76,8 +95,8 @@ func fetchFile(ctx context.Context, cfg Config, cmd protocol.Fetch) error {
 	}
 	req.Header = authHeader(cfg)
 	// No overall timeout on purpose: a big file on a slow line takes as long as
-	// it takes. The server drops a connection that stops moving.
-	resp, err := http.DefaultClient.Do(req)
+	// it takes. Dial, TLS and response-header waits are bounded by fetchClient.
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}

@@ -36,6 +36,9 @@ func OpenDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database %s: %w", path, err)
 	}
+	// SQLite allows one writer at a time; capping the pool at one connection
+	// serialises writes in-process and avoids SQLITE_BUSY contention.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)

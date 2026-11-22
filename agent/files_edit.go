@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"unicode/utf8"
 
 	"headnode/protocol"
@@ -75,14 +76,13 @@ func readText(p string) (protocol.FileResponse, error) {
 	return protocol.FileResponse{Text: string(data), Version: versionOf(info)}, nil
 }
 
-// writeText replaces the text of an existing file, but only if it is still the
-// version that was read: if someone changed it on the host in the meantime, the
-// save is refused instead of silently throwing their change away.
+// writeText replaces the text of an existing file atomically, but only if it is
+// still the version that was read: if someone changed it on the host in the
+// meantime, the save is refused instead of silently throwing their change away.
 //
-// It writes into the file itself (not a new file renamed over it), so the
-// owner, the mode, links and hard links all stay as they are. The price is that
-// a crash in the middle of the write leaves a half-written file. The files this
-// is for are small, and an editor on the host does the same.
+// It writes to a temporary file in the same directory, syncs and closes it,
+// preserves the file's mode, and renames it into place so a crash mid-write
+// never leaves a half-written file.
 func writeText(p, content, version string) (protocol.FileResponse, error) {
 	abs, err := absPath(p)
 	if err != nil {
@@ -94,7 +94,11 @@ func writeText(p, content, version string) (protocol.FileResponse, error) {
 	if len(content) > protocol.MaxEditBytes {
 		return protocol.FileResponse{}, errTooBigEdit
 	}
-	info, err := os.Stat(abs) // through a link, like the file it points at
+	target, err := filepath.EvalSymlinks(abs) // follow links so the target file is replaced atomically
+	if err != nil {
+		return protocol.FileResponse{}, err
+	}
+	info, err := os.Lstat(target)
 	if err != nil {
 		return protocol.FileResponse{}, err
 	}
@@ -108,33 +112,36 @@ func writeText(p, content, version string) (protocol.FileResponse, error) {
 		return protocol.FileResponse{}, errChanged
 	}
 
-	// No O_CREATE and no O_TRUNC yet: verify the opened descriptor is not the
-	// credentials file before truncating, so a swap after Stat cannot clobber it.
-	file, err := os.OpenFile(abs, os.O_WRONLY, 0)
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return protocol.FileResponse{}, err
 	}
-	openedInfo, err := file.Stat()
-	if err != nil {
-		file.Close()
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			tmp.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.WriteString(content); err != nil {
 		return protocol.FileResponse{}, err
 	}
-	if isSecretFile(openedInfo) {
-		file.Close()
-		return protocol.FileResponse{}, errSecretFile
-	}
-	if err := file.Truncate(0); err != nil {
-		file.Close()
+	if err := tmp.Sync(); err != nil {
 		return protocol.FileResponse{}, err
 	}
-	if _, err := file.WriteString(content); err != nil {
-		file.Close()
+	if err := tmp.Close(); err != nil {
 		return protocol.FileResponse{}, err
 	}
-	if err := file.Close(); err != nil {
+	if err := os.Chmod(tmpPath, info.Mode().Perm()); err != nil {
 		return protocol.FileResponse{}, err
 	}
-	after, err := os.Stat(abs)
+	if err := os.Rename(tmpPath, target); err != nil {
+		return protocol.FileResponse{}, err
+	}
+	committed = true
+
+	after, err := os.Stat(target)
 	if err != nil {
 		return protocol.FileResponse{}, err
 	}

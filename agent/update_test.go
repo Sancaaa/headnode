@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,5 +107,25 @@ func TestDownloadVerified(t *testing.T) {
 	}
 	if _, err := os.Lstat(dstBad); err == nil {
 		t.Error("mismatched download was not removed")
+	}
+}
+
+func TestUpdateRecordsEarlyErrors(t *testing.T) {
+	var recorded error
+	called := false
+	old := onUpdateResult
+	onUpdateResult = func(err error) {
+		called = true
+		recorded = err
+	}
+	t.Cleanup(func() { onUpdateResult = old })
+
+	// Missing config file fails before swapProgram; onUpdateResult must still receive the error.
+	err := Update(filepath.Join(t.TempDir(), "missing.json"), false, io.Discard)
+	if err == nil {
+		t.Fatal("Update with missing config succeeded, want error")
+	}
+	if !called || recorded != err {
+		t.Fatalf("onUpdateResult called=%v err=%v, want true and %v", called, recorded, err)
 	}
 }

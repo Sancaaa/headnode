@@ -173,9 +173,10 @@ func TestDialTunnelTargetUsesUnixSocketForVNC(t *testing.T) {
 		t.Fatalf("dialTunnelTarget(vncAddress, sock): %v", err)
 	}
 	defer conn.Close()
-	got, err := io.ReadAll(conn)
-	if err != nil || string(got) != "RFB 003.008\n" {
-		t.Errorf("read %q (%v), want RFB banner from Unix socket", got, err)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, len("RFB 003.008\n"))
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "RFB 003.008\n" {
+		t.Errorf("read %q (%v), want RFB banner from Unix socket", buf, err)
 	}
 
 	// Non-VNC targets must NOT be routed to the VNC Unix socket.
@@ -188,7 +189,8 @@ func TestDialTunnelTargetUsesUnixSocketForVNC(t *testing.T) {
 		t.Fatalf("dialTunnelTarget(tcpTarget, sock): %v", err)
 	}
 	defer tcpConn.Close()
-	got, err = io.ReadAll(tcpConn)
+	tcpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, err := io.ReadAll(tcpConn)
 	if err != nil || string(got) != "SSH-2.0\n" {
 		t.Errorf("non-VNC target read %q (%v), want TCP banner", got, err)
 	}

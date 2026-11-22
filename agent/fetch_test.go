@@ -287,3 +287,17 @@ func TestRunFetchReportsTheResult(t *testing.T) {
 		t.Errorf("failure result = %+v, want not ok and a checksum message", failed)
 	}
 }
+
+func TestFetchClientHasTransportTimeoutsWithoutTotalTimeout(t *testing.T) {
+	if fetchClient.Timeout != 0 {
+		t.Errorf("fetchClient.Timeout = %v, want 0 so large transfers are not cut off", fetchClient.Timeout)
+	}
+	tr, ok := fetchClient.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("fetchClient.Transport = %T, want *http.Transport", fetchClient.Transport)
+	}
+	if tr.TLSHandshakeTimeout <= 0 || tr.ResponseHeaderTimeout <= 0 || tr.DialContext == nil {
+		t.Errorf("transport timeouts not set: TLS=%v Header=%v Dial=%v",
+			tr.TLSHandshakeTimeout, tr.ResponseHeaderTimeout, tr.DialContext != nil)
+	}
+}

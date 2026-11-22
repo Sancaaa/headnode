@@ -127,18 +127,25 @@ func (t *sessionTable) create(userID int64, agentID, kind string, need action, w
 	return sess, nil
 }
 
+// snapshot returns all waiting or running sessions matching match, safe to
+// inspect or end outside t.mu.
+func (t *sessionTable) snapshot(match func(*session) bool) []*session {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*session
+	for _, sess := range t.byID {
+		if match(sess) {
+			out = append(out, sess)
+		}
+	}
+	return out
+}
+
 // endWhere ends every waiting or running session matching match, and returns how many.
 // Each running relay watches its session's done channel, so ending a session cuts off
 // both sides immediately.
 func (t *sessionTable) endWhere(match func(*session) bool) int {
-	t.mu.Lock()
-	var victims []*session
-	for _, sess := range t.byID {
-		if match(sess) {
-			victims = append(victims, sess)
-		}
-	}
-	t.mu.Unlock()
+	victims := t.snapshot(match)
 	for _, sess := range victims { // outside the lock: end takes it
 		t.end(sess)
 	}
@@ -172,53 +179,28 @@ func (t *sessionTable) endOtherWebSessions(userID int64, exceptTokenHash string)
 	})
 }
 
-// snapshot returns all waiting or running sessions matching match, so callers can
-// check database permissions outside t.mu.
-func (t *sessionTable) snapshot(match func(*session) bool) []*session {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	var out []*session
-	for _, sess := range t.byID {
-		if match(sess) {
-			out = append(out, sess)
-		}
-	}
-	return out
-}
-
-// endUnauthorizedSessions re-checks each candidate session against current database
-// permissions and ends any that its owner is no longer allowed to hold.
-func (s *Server) endUnauthorizedSessions(candidates []*session) int {
-	ended := 0
-	for _, sess := range candidates {
-		if !s.userStillAllowed(sess.userID, sess.agentID, sess.need) {
+// endUnauthorized re-checks active sessions matching match against current
+// database permissions and ends any that their owner is no longer allowed to hold.
+func (s *Server) endUnauthorized(match func(*session) bool) {
+	for _, sess := range s.sessions.snapshot(match) {
+		var admin, disabled int
+		err := s.db.QueryRow(`SELECT is_admin, disabled FROM users WHERE id = ?`, sess.userID).Scan(&admin, &disabled)
+		if err != nil || disabled == 1 {
 			s.sessions.end(sess)
-			ended++
+			continue
+		}
+		if allowed, err := s.can(user{ID: sess.userID, IsAdmin: admin == 1}, sess.agentID, sess.need); err != nil || !allowed {
+			s.sessions.end(sess)
 		}
 	}
-	return ended
 }
 
-func (s *Server) userStillAllowed(userID int64, hostID string, a action) bool {
-	var admin, disabled int
-	err := s.db.QueryRow(`SELECT is_admin, disabled FROM users WHERE id = ?`, userID).Scan(&admin, &disabled)
-	if err != nil || disabled == 1 {
-		return false
-	}
-	allowed, err := s.can(user{ID: userID, IsAdmin: admin == 1}, hostID, a)
-	return err == nil && allowed
+func (s *Server) endUnauthorizedForUser(userID int64) {
+	s.endUnauthorized(func(sess *session) bool { return sess.userID == userID })
 }
 
-func (s *Server) endUnauthorizedForUser(userID int64) int {
-	return s.endUnauthorizedSessions(s.sessions.snapshot(func(sess *session) bool {
-		return sess.userID == userID
-	}))
-}
-
-func (s *Server) endUnauthorizedForHost(hostID string) int {
-	return s.endUnauthorizedSessions(s.sessions.snapshot(func(sess *session) bool {
-		return sess.agentID == hostID
-	}))
+func (s *Server) endUnauthorizedForHost(hostID string) {
+	s.endUnauthorized(func(sess *session) bool { return sess.agentID == hostID })
 }
 
 func (t *sessionTable) get(id string) *session {
