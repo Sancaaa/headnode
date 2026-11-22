@@ -1,75 +1,107 @@
 # headnode
 
-Self-hosted remote management. You install an **agent** on each host (Linux or Windows) and manage all of them from one **web dashboard**. Features: web terminal, file manager, sending files to many hosts at once, TCP tunnels, and the host's **screen in the browser** (VNC). All of it works even when hosts sit behind NAT.
-
-This project has two goals:
-1. Be a tool that actually gets used to manage my own machines.
-2. **Be a way to learn** the technology behind it (reverse connections, WebSocket relays, PTYs, auth). The code is kept deliberately simple, and every design decision is written down.
-
-> Status: **version 1**. Milestones M0 to M9 are done (see the [roadmap](docs/roadmap.md)). Tried on a Linux server behind Caddy, a Windows 11 laptop and a Raspberry Pi 5.
-
-## How it works, in one picture
+Self-hosted remote host management in Go. Install `headnode-agent` on Linux or Windows machines and manage them from one web dashboard: interactive terminal, file manager, multi-host file transfers, VNC desktop access, Docker inspection and control, and local TCP port forwarding—without port forwarding on managed hosts.
 
 ```
- Browser ──HTTPS/WS──►  headnode (VPS)  ◄──WSS (agent dials out)──  headnode-agent (each host)
+Browser / hnctl ──HTTPS/WSS──► Caddy ──HTTP/WS──► headnode (VPS + SQLite) ◄──WSS (outbound)── headnode-agent (Linux / Windows)
 ```
 
-The agent opens the connection to the server, not the other way around. That is why hosts behind NAT or a router stay reachable without any port forwarding on the router. The full explanation is in [docs/architecture.md](docs/architecture.md).
+Agents dial out to the server over a persistent WebSocket control channel. Sessions (`shell`, `files`, `download`, `tunnel`, `docker`) open a paired, single-use WebSocket relayed through the server, so machines behind NAT or home routers stay reachable.
 
-## What you can do
+## Features
 
-| From the dashboard | How |
+| Area | Capabilities |
 |---|---|
-| See every host: online, CPU, memory, disk | Hosts page, filled by the agent's heartbeat |
-| Open a terminal on a Linux host | Terminal tab (full screen available) |
-| Browse, edit, upload and download files; send files or folders to many hosts | Files tab, Transfers |
-| See and control a host's screen, with zoom and pan for several monitors | Screen tab: noVNC through the agent's tunnel; the host's VNC server is switched on and off from the page |
-| See and manage a Linux host's Docker: containers, Compose stacks, images, volumes, networks, logs; with the `docker` command behind every button | Docker tab (only where Docker is installed). **Security note:** membership of the `docker` group is root on that machine, so on a host where the agent's user is in that group, the agent is effectively root again (see D-48 and D-70); you decide that per host |
-| Forward a port from your laptop to a host (`ssh`, RDP, ...) | `hnctl forward` |
-| Add a host with one command | Hosts, Add host: a `curl ... \| sh` line for Linux, a PowerShell line for Windows |
-| Know which agents are out of date, and update them | An **Update available** tag on the Hosts page, with how to update that host: `sudo headnode update` on Linux, the tray icon's **Update headnode…** on Windows (the agent updates itself; you choose when) |
-| Manage accounts | A **Profile** page for everyone (change password, display name, see and sign out your logins) and, for administrators, resetting passwords, disabling users and giving admin rights on the Users page |
-| Audit who did what | Audit page |
-
-On a Windows host the person at the machine also gets a **tray icon** (see [docs/windows.md](docs/windows.md)): blue when connected, with **Exit** to turn headnode off completely, and a **headnode** app in the Start menu to turn it back on.
-
-## Documentation map
-
-| Document | Contents | Read it when… |
-|---|---|---|
-| [docs/architecture.md](docs/architecture.md) | Components, flows, data model, security | you want to understand the system |
-| [docs/protocol.md](docs/protocol.md) | Message contract between server, agent and browser | you write server or agent code |
-| [docs/decisions.md](docs/decisions.md) | Design decision log (why X, not Y) | you wonder "why is it like this?" |
-| [docs/roadmap.md](docs/roadmap.md) | Milestones M0 to M9 with done criteria | you want to know what was built, and what may come |
-| [docs/principles.md](docs/principles.md) | Ground rules: YAGNI, code style, git | before writing code |
-| [docs/design.md](docs/design.md) | UI guide (minimal dashboard style) | you build a web page |
-| [docs/deploy.md](docs/deploy.md) | Run the server on a VPS behind Caddy, and add hosts with one command | you put it on the internet |
-| [docs/windows.md](docs/windows.md) | Add a Windows host, its screen, and the tray icon | you manage Windows machines |
-| [docs/linux-screen.md](docs/linux-screen.md) | The screen of a Linux desktop (Raspberry Pi and others) | you want a Linux host's screen in the dashboard |
-| [docs/logo/README.md](docs/logo/README.md) | The logo, its files, colors and rules | you use or change the logo |
+| **Host inventory** | Live online status, CPU, memory, disk, uptime, LAN/WAN addresses, OS/kernel/hardware metadata, and agent version checks via 20 s heartbeats. |
+| **Web terminal** | Browser PTY (`xterm.js`) with resize and fullscreen keyboard lock (Linux hosts). |
+| **File manager & transfers** | Browse, filter, sort, upload (up to 4 GB, SHA-256 deduplicated), inline text edit (up to 512 KB, atomic writes), rename, copy, move, `chmod`, folder zip download, and multi-host fan-out transfers (Linux hosts). |
+| **Remote screen (VNC)** | Browser desktop control via `noVNC` over a loopback tunnel with zoom/pan controls and start/stop VNC toggles. Supports TightVNC on Windows, `x11vnc` on X11, and private Unix-socket `wayvnc` on Wayland. |
+| **Docker** | Per-host containers, Compose stacks, images, volumes, networks, logs, inspect (env values redacted), and prune via `/var/run/docker.sock`, showing the corresponding `docker` CLI command before actions (Linux hosts). |
+| **TCP port forwarding** | Forward local laptop ports to loopback ports on any managed host with `hnctl forward PORT:HOST:TARGET`. |
+| **Enrollment & self-update** | One-line Linux (`curl | sh`) and Windows PowerShell installers. Outdated agents are flagged in the UI and update themselves (`sudo headnode update` or Windows tray menu) with SHA-256 verification. |
+| **Windows tray app** | System tray icon showing connection state, VNC toggle, self-update trigger, and clean exit ([docs/windows.md](docs/windows.md)). |
+| **Accounts, groups & audit** | Group-scoped RBAC (`admin`, per-group `operator` and `viewer`), self-service profile/password/session revocation, and SQLite `audit_log`. |
 
 ## Components
 
-| Binary | Runs on | Job |
+| Binary | Target | Responsibility |
 |---|---|---|
-| `headnode` | VPS (public) | Dashboard, API, login, session relay, SQLite |
-| `headnode-agent` | Every managed host (Linux, Windows) | Reports status; opens shell, file and tunnel sessions on the server's request; starts and stops the host's VNC server; on Windows, the tray icon |
-| `hnctl` | Your laptop | Local port forwarding, e.g. `ssh -p 2222 localhost` |
+| `headnode` | VPS / control server | Embedded web UI, HTTP/WS API, session relay, auth/RBAC, SQLite persistence, agent binary hosting |
+| `headnode-agent` | Managed hosts (Linux, Windows) | Outbound control WS, sysinfo heartbeats, PTY shell, file ops, Docker API, VNC lifecycle, loopback tunnels, Windows tray |
+| `hnctl` | Operator workstation | CLI authentication, host listing, and TCP port forwarding |
 
-## Running it
+## Security Model
 
-Everything is built with the Go standard toolchain. The server on a VPS is installed from a git clone with one script, and hosts are added with the one command the dashboard shows. The steps are in [docs/deploy.md](docs/deploy.md). For development on your own machine:
+- **Default-deny API & group RBAC**: Every `/api/*` endpoint (except login) requires a valid session; unauthorized host/file/transfer lookups return `404` to avoid resource enumeration. Revoking a user, role, host, or session terminates active WebSocket sessions immediately.
+- **Session & token storage**: Passwords use `bcrypt`; session tokens, enrollment tokens, and agent secrets are 256-bit random values stored only as SHA-256 digests. Failed logins and failed enrollments are rate-limited per client IP with bounded memory tracking.
+- **Origin & CSP**: State-changing requests and browser WebSocket upgrades verify `Origin` (host and scheme). Embedded frontend assets use strict DOM construction (`document.createElement`, no `innerHTML`) and a strict `Content-Security-Policy`.
+- **Agent isolation**: File operations block reads, writes, copies, renames, deletes, and `chmod` against `agent.json` and its parent directory. Agent self-updates verify `SHA256SUMS` before executing or swapping binaries. `wayvnc` binds to a `0600` Unix socket inside the agent's `0700` config directory; `x11vnc` and TightVNC generate a fresh password per start.
+- **No shell interpolation**: External commands (`docker compose`, `systemctl`, VNC binaries) always pass discrete argv slices—never `sh -c` with request data.
+- **Docker note**: Adding the Linux agent's user to the `docker` group grants root-equivalent privileges on that host; enable it only per host where intended.
 
-```
+## Quick Start
+
+### Local development
+
+Requirements: Go 1.27+ (`go.mod` pins the exact version), `CGO_ENABLED=0` supported.
+
+```sh
 go vet ./...
 go test ./...
-go run ./cmd/headnode          # the server, on 127.0.0.1:8080
+go run ./cmd/headnode user create -username admin -admin
+go run ./cmd/headnode                 # listens on 127.0.0.1:8080
 ```
 
-The Screen page needs the noVNC library: `start.sh` downloads it on a server, and [web/vendor/README.md](web/vendor/README.md) has the command for a local copy. The agents served to new hosts are built with `scripts/build-agents.ps1` (or `.sh`).
+Optional local setup:
+- **Screen tab (noVNC)**: fetch vendored noVNC assets per [web/vendor/README.md](web/vendor/README.md) (`start.sh` handles this automatically on a server).
+- **Agent binaries**: cross-compile Linux (`amd64`, `arm64`) and Windows (`amd64`) agents plus `dist/SHA256SUMS` with `./scripts/build-agents.sh` (or `scripts/build-agents.ps1`).
 
-## Development requirements
+### Server flags & CLI
 
-- Go 1.22 or newer (the project's `go.mod` pins the exact version).
-- A browser; Linux and Windows machines to try the agents on.
-- Dependencies are few, and the standard library comes first ([docs/decisions.md](docs/decisions.md) says why each was added): `modernc.org/sqlite`, `github.com/coder/websocket`, `creack/pty`, `golang.org/x/*`, and `fyne.io/systray` (Windows tray icon only).
+```sh
+headnode [-addr 127.0.0.1:8080] [-db data/headnode.db] [-agents dist]
+headnode user create -username <name> [-admin] [-db data/headnode.db]
+headnode token create [-db data/headnode.db]
+
+hnctl login <server-url>
+hnctl hosts
+hnctl forward 2222:<host>:127.0.0.1:22
+```
+
+### VPS deployment
+
+Run behind Caddy on a Linux VPS using `start.sh` and the hardened systemd unit in `deploy/headnode.service`. Full instructions are in [docs/deploy.md](docs/deploy.md).
+
+## Project Layout & Stack
+
+```
+cmd/
+  headnode/         Control-plane server and CLI subcommands
+  headnode-agent/   Host agent, service installers, Windows tray, self-updater
+  hnctl/            Operator CLI client and TCP port forwarder
+protocol/           Shared JSON wire messages and version helpers
+server/             HTTP/WS handlers, relay, SQLite schema/migrations, RBAC, audit
+agent/              OS collectors, Linux PTY, files/zip/fetch, Docker client, VNC, tunnels
+web/                Embedded vanilla JS/CSS SPA (no build step) + vendored xterm.js
+deploy/             Caddyfile and systemd unit
+scripts/            Cross-compilation scripts for agent binaries and SHA256SUMS
+docs/               Architecture, protocol, design guide, deploy, OS guides, decisions
+```
+
+**Tech stack**: Go standard library first, `modernc.org/sqlite` (pure-Go SQLite, WAL mode), `github.com/coder/websocket`, `github.com/creack/pty`, `golang.org/x/{crypto,sys,term}`, `fyne.io/systray` (Windows tray only), and zero-build vanilla JS/CSS embedded via `//go:embed`.
+
+## Documentation
+
+| Document | Scope |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System flows, data model, security boundaries |
+| [docs/protocol.md](docs/protocol.md) | Server/agent/browser WebSocket wire contract |
+| [docs/deploy.md](docs/deploy.md) | VPS deployment behind Caddy and host enrollment |
+| [docs/windows.md](docs/windows.md) | Windows agent, TightVNC, and system tray |
+| [docs/linux-screen.md](docs/linux-screen.md) | X11 (`x11vnc`) and Wayland (`wayvnc`) screen sharing |
+| [docs/decisions.md](docs/decisions.md) | Architecture and engineering decision log |
+| [docs/design.md](docs/design.md) | UI tokens and layout specification |
+
+## License
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).
