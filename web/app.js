@@ -59,6 +59,10 @@ const ICON_TRANSFERS ='M5 2v12M2 5l3-3 3 3M11 14V2M8 11l3 3 3-3';
 const ICON_AUDIT ='M3.5 2.5h9v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3';
 const ICON_UPLOADS = 'M4 2h5l3 3v9H4zM9 2v3h3';
 const ICON_GROUPS ='M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c.4-2 1.9-3 4-3s3.6 1 4 3M11 7a1.7 1.7 0 1 0 0-3.4M11.5 10c1.6.1 2.5 1 2.8 3';
+const ICON_PLAY = 'M5 3.5l7.5 4.5L5 12.5z';
+const ICON_STOP = 'M4.5 4.5h7v7h-7z';
+const ICON_MORE_V = 'M8 3.2v1M8 7.5v1M8 11.8v1';
+const ICON_DOWN = 'M8 3v10M4.5 9.5L8 13l3.5-3.5';
 
 function button(label, className, onClick) {
   const b = h('button', { class: className, type: 'button' }, label);
@@ -2452,19 +2456,27 @@ function mountDocker(host, box) {
   const pending = new Map(); // request id -> { resolve, reject }
   const data = { stacks: [], containers: [], images: [], volumes: [], networks: [] };
 
-  // View state: one tab at a time with contextual filters so large hosts stay readable.
+  // View state: 4 tabs (Stacks are expandable rows inside Containers, like Docker Desktop).
   let activeTab = 'containers';
   let search = '';
-  let stateFilter = 'all';     // containers: all | running | stopped
-  let stackFilter = '';        // containers: '' | '__none__' | <project>
-  let imagesUnused = false;    // images: only unused
-  let volumeType = 'all';      // volumes: all | named | anonymous
-  let volumesUnused = false;   // volumes: only unused
+  let runningOnly = false;
+  const expandedStacks = new Set();
+  let imagesUnused = false;
+  let volumeType = 'all';      // all | named | anonymous
+  let volumesUnused = false;
   const sorts = {
     containers: { key: null, asc: true },
     images: { key: 'size', asc: false },
     volumes: { key: null, asc: true },
   };
+
+  // Inline container detail view state.
+  let selectedContainer = null;
+  let detailTab = 'logs';      // logs | inspect | mounts
+  let detailTail = 200;
+  let detailLogFilter = '';
+  let detailReqSeq = 0;
+  let detailCache = { name: null, logs: null, inspect: null };
 
   let openMenu = null; // { el, owner }
   function closeMenu() {
@@ -2486,7 +2498,10 @@ function mountDocker(host, box) {
   const message = h('div', { class: 'docker-message' });
   const reconnect = h('button', { class: 'btn', type: 'button', hidden: '' }, 'Reconnect');
   const bar = h('div', { class: 'docker-bar' },
-    iconButton('Refresh', ICON_REFRESH, () => reload()),
+    iconButton('Refresh', ICON_REFRESH, () => {
+      detailCache = { name: null, logs: null, inspect: null };
+      reload();
+    }),
     button('Prune…', 'btn', () => pruneDialog()),
     reconnect,
     summary);
@@ -2499,7 +2514,7 @@ function mountDocker(host, box) {
 
   searchInput.addEventListener('input', () => {
     search = searchInput.value;
-    renderTable();
+    renderContent();
   });
 
   function request(op, fields) {
@@ -2546,6 +2561,7 @@ function mountDocker(host, box) {
   function afterChange(result, doneText) {
     if (!result.ok) return failureText(result);
     showMessage(doneText || 'Done.', result.data.command, false, result.data.output);
+    detailCache = { name: null, logs: null, inspect: null };
     reload();
     return null;
   }
@@ -2567,23 +2583,59 @@ function mountDocker(host, box) {
 
   // ---- helpers
 
-  const row = (...cells) => h('tr', { class: 'static' }, cells);
+  const row = (className, ...cells) => h('tr', { class: className ? 'static ' + className : 'static' }, cells);
   const actions = (...nodes) => h('td', { class: 'col-act' }, h('div', { class: 'docker-actions' }, nodes));
   const list = (items) => (items && items.length > 0 ? items.join(', ') : '—');
-  const imageName = (img) => (img.tags && img.tags.length > 0
-    ? img.tags.join(', ')
-    : '<none> (' + img.id.replace('sha256:', '').slice(0, 12) + ')');
+  const shortId = (id) => (id || '').replace(/^sha256:/, '').slice(0, 12);
+  const statusDot = (kind, title) => h('span', { class: 'docker-dot ' + kind, title: title || null });
 
-  function containerProjects() {
-    const set = new Set();
-    data.stacks.forEach((s) => { if (s.project) set.add(s.project); });
-    data.containers.forEach((c) => { if (c.project) set.add(c.project); });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  function splitRepoTag(tag) {
+    const colon = tag.lastIndexOf(':');
+    const slash = tag.lastIndexOf('/');
+    if (colon > slash) return { repo: tag.slice(0, colon), tag: tag.slice(colon + 1) };
+    return { repo: tag, tag: 'latest' };
+  }
+
+  function imageParts(img) {
+    if (!img.tags || img.tags.length === 0) {
+      return { repo: '<none>', tag: '<none>', extra: 0, label: '<none> (' + shortId(img.id) + ')' };
+    }
+    const first = splitRepoTag(img.tags[0]);
+    return { repo: first.repo, tag: first.tag, extra: img.tags.length - 1, label: img.tags.join(', ') };
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      const area = h('textarea', { class: 'clipboard-helper', readonly: '', 'aria-hidden': 'true' });
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch (e) { /* stays false */ }
+      area.remove();
+      return copied;
+    }
+  }
+
+  function copyMini(text, label) {
+    const btn = iconOnly(label, ICON_COPY_PATH, async () => {
+      const ok = await copyText(text);
+      btn.title = ok ? 'Copied!' : 'Copy failed';
+      btn.classList.toggle('docker-act-primary', ok);
+      setTimeout(() => {
+        btn.title = label;
+        btn.classList.remove('docker-act-primary');
+      }, 1200);
+    }, 'docker-copy-mini');
+    return btn;
   }
 
   function hasActiveFilter() {
     if (search.trim()) return true;
-    if (activeTab === 'containers') return stateFilter !== 'all' || stackFilter !== '';
+    if (activeTab === 'containers') return runningOnly;
     if (activeTab === 'images') return imagesUnused;
     if (activeTab === 'volumes') return volumeType !== 'all' || volumesUnused;
     return false;
@@ -2592,32 +2644,45 @@ function mountDocker(host, box) {
   function clearFilters() {
     search = '';
     searchInput.value = '';
-    if (activeTab === 'containers') { stateFilter = 'all'; stackFilter = ''; }
+    if (activeTab === 'containers') runningOnly = false;
     if (activeTab === 'images') imagesUnused = false;
     if (activeTab === 'volumes') { volumeType = 'all'; volumesUnused = false; }
     renderFilters();
-    renderTable();
+    renderContent();
   }
 
   function switchTab(tab) {
-    if (activeTab === tab) return;
+    if (activeTab === tab && !selectedContainer) return;
     activeTab = tab;
+    selectedContainer = null;
     search = '';
     searchInput.value = '';
     renderAll();
   }
 
-  function showStackContainers(project) {
+  function openContainerDetail(name, tab = 'logs') {
     activeTab = 'containers';
-    search = '';
-    searchInput.value = '';
-    stateFilter = 'all';
-    stackFilter = project;
+    selectedContainer = name;
+    detailTab = tab;
+    if (detailCache.name !== name) {
+      detailCache = { name, logs: null, inspect: null };
+      detailLogFilter = '';
+    }
+    renderAll();
+  }
+
+  function jumpToImage(imageName) {
+    const { repo } = splitRepoTag(imageName);
+    activeTab = 'images';
+    selectedContainer = null;
+    imagesUnused = false;
+    search = repo;
+    searchInput.value = repo;
     renderAll();
   }
 
   function moreButton(items, disabled) {
-    const more = iconOnly('More', ICON_MORE, () => {
+    const more = iconOnly('More actions', ICON_MORE_V, () => {
       if (openMenu && openMenu.owner === more) {
         closeMenu();
         return;
@@ -2642,7 +2707,7 @@ function mountDocker(host, box) {
     const sortBtn = button(label + arrow, 'th-sort', () => {
       if (s.key === key) s.asc = !s.asc;
       else { s.key = key; s.asc = defaultAsc; }
-      renderTable();
+      renderContent();
     });
     return h('th', { 'aria-sort': active ? (s.asc ? 'ascending' : 'descending') : null }, sortBtn);
   }
@@ -2656,16 +2721,47 @@ function mountDocker(host, box) {
       h('tbody', {}, rows));
   }
 
+  function matches(q, ...values) {
+    if (!q) return true;
+    return values.some((v) => v && String(v).toLowerCase().includes(q));
+  }
+
+  function containerLinks(names) {
+    if (!names || names.length === 0) return '—';
+    const existing = new Set(data.containers.map((c) => c.name));
+    const nodes = [];
+    names.forEach((name, i) => {
+      if (i > 0) nodes.push(', ');
+      nodes.push(existing.has(name)
+        ? button(name, 'link-button', () => openContainerDetail(name))
+        : name);
+    });
+    return nodes;
+  }
+
+  async function startContainer(c) {
+    const result = await attempt('start', { container: c.name });
+    if (disposed) return;
+    if (result.ok) afterChange(result, 'Started.');
+    else showMessage(failureText(result), null, true);
+  }
+
   // ---- rendering
 
   function renderAll() {
     tabsBar.hidden = !loaded;
-    filtersBar.hidden = !loaded;
-    if (!loaded) return;
+    if (!loaded) {
+      filtersBar.hidden = true;
+      return;
+    }
+    if (selectedContainer && !data.containers.some((c) => c.name === selectedContainer)) {
+      selectedContainer = null;
+    }
+    filtersBar.hidden = Boolean(selectedContainer);
     renderSummary();
     renderTabs();
-    renderFilters();
-    renderTable();
+    if (!selectedContainer) renderFilters();
+    renderContent();
   }
 
   function renderSummary() {
@@ -2685,7 +2781,6 @@ function mountDocker(host, box) {
     const running = data.containers.filter((c) => c.state === 'running').length;
     const tabs = [
       { id: 'containers', label: 'Containers', count: data.containers.length ? running + '/' + data.containers.length : '0' },
-      { id: 'stacks', label: 'Stacks', count: String(data.stacks.length) },
       { id: 'images', label: 'Images', count: String(data.images.length) },
       { id: 'volumes', label: 'Volumes', count: String(data.volumes.length) },
       { id: 'networks', label: 'Networks', count: String(data.networks.length) },
@@ -2708,35 +2803,21 @@ function mountDocker(host, box) {
     const extras = [];
 
     if (activeTab === 'containers') {
-      const stateSelect = h('select', { class: 'input input-small', 'aria-label': 'Filter by state' },
-        h('option', { value: 'all', selected: stateFilter === 'all' ? '' : null }, 'All states'),
-        h('option', { value: 'running', selected: stateFilter === 'running' ? '' : null }, 'Running'),
-        h('option', { value: 'stopped', selected: stateFilter === 'stopped' ? '' : null }, 'Stopped'));
-      stateSelect.addEventListener('change', () => { stateFilter = stateSelect.value; renderTable(); });
-      extras.push(stateSelect);
-
-      const projects = containerProjects();
-      if (stackFilter && stackFilter !== '__none__' && !projects.includes(stackFilter)) stackFilter = '';
-      if (projects.length > 0) {
-        const stackSelect = h('select', { class: 'input input-small', 'aria-label': 'Filter by stack' },
-          h('option', { value: '', selected: stackFilter === '' ? '' : null }, 'All stacks'),
-          h('option', { value: '__none__', selected: stackFilter === '__none__' ? '' : null }, 'Standalone'),
-          ...projects.map((p) => h('option', { value: p, selected: stackFilter === p ? '' : null }, p)));
-        stackSelect.addEventListener('change', () => { stackFilter = stackSelect.value; renderTable(); });
-        extras.push(stackSelect);
-      }
+      const runBox = h('input', { type: 'checkbox', checked: runningOnly ? '' : null });
+      runBox.addEventListener('change', () => { runningOnly = runBox.checked; renderContent(); });
+      extras.push(h('label', { class: 'toggle' }, runBox, 'Only show running'));
     } else if (activeTab === 'images') {
       const unusedBox = h('input', { type: 'checkbox', checked: imagesUnused ? '' : null });
-      unusedBox.addEventListener('change', () => { imagesUnused = unusedBox.checked; renderTable(); });
+      unusedBox.addEventListener('change', () => { imagesUnused = unusedBox.checked; renderContent(); });
       extras.push(h('label', { class: 'toggle' }, unusedBox, 'Unused only'));
     } else if (activeTab === 'volumes') {
       const typeSelect = h('select', { class: 'input input-small', 'aria-label': 'Filter by volume type' },
         h('option', { value: 'all', selected: volumeType === 'all' ? '' : null }, 'All types'),
         h('option', { value: 'named', selected: volumeType === 'named' ? '' : null }, 'Named'),
         h('option', { value: 'anonymous', selected: volumeType === 'anonymous' ? '' : null }, 'Anonymous'));
-      typeSelect.addEventListener('change', () => { volumeType = typeSelect.value; renderTable(); });
+      typeSelect.addEventListener('change', () => { volumeType = typeSelect.value; renderContent(); });
       const unusedBox = h('input', { type: 'checkbox', checked: volumesUnused ? '' : null });
-      unusedBox.addEventListener('change', () => { volumesUnused = unusedBox.checked; renderTable(); });
+      unusedBox.addEventListener('change', () => { volumesUnused = unusedBox.checked; renderContent(); });
       extras.push(typeSelect, h('label', { class: 'toggle' }, unusedBox, 'Unused only'));
     }
 
@@ -2753,51 +2834,44 @@ function mountDocker(host, box) {
       button('Clear', 'link-button', clearFilters));
   }
 
-  function matches(q, ...values) {
-    if (!q) return true;
-    return values.some((v) => v && String(v).toLowerCase().includes(q));
-  }
-
-  function renderTable() {
+  function renderContent() {
     closeMenu();
+    if (selectedContainer) {
+      const c = data.containers.find((item) => item.name === selectedContainer);
+      if (c) {
+        renderContainerDetail(c);
+        return;
+      }
+      selectedContainer = null;
+      filtersBar.hidden = false;
+      renderFilters();
+    }
+
     const q = search.trim().toLowerCase();
     const emptyMsg = (noun) => (hasActiveFilter() ? 'No matching ' + noun + '.' : 'No ' + noun + '.');
-    let note = null;
-    let content = null;
+    const nodes = [];
 
     if (activeTab === 'containers') {
-      let items = data.containers.filter((c) => {
-        if (stateFilter === 'running' && c.state !== 'running') return false;
-        if (stateFilter === 'stopped' && c.state === 'running') return false;
-        if (stackFilter === '__none__' && c.project) return false;
-        if (stackFilter && stackFilter !== '__none__' && c.project !== stackFilter) return false;
-        return matches(q, c.name, c.image, c.project, c.service, c.state, c.status, (c.ports || []).join(' '));
-      });
-      const s = sorts.containers;
-      if (s.key) {
-        items = items.slice().sort((a, b) => {
-          const d = s.key === 'name'
-            ? a.name.localeCompare(b.name)
-            : (a.state === 'running' ? 0 : 1) - (b.state === 'running' ? 0 : 1)
-              || a.state.localeCompare(b.state)
-              || a.name.localeCompare(b.name);
-          return s.asc ? d : -d;
-        });
-      }
-      updateFilterStatus(items.length, data.containers.length);
-      content = table(
-        [sortHeader('containers', 'Container', 'name'), 'Image', sortHeader('containers', 'State', 'state'), 'Ports', ''],
-        items.map(containerRow),
-        emptyMsg('containers'));
-    } else if (activeTab === 'stacks') {
-      note = 'Compose projects, found from the labels of their containers. Click a stack to view its containers.';
-      const items = data.stacks.filter((s) => matches(q, s.project, s.working_dir, (s.services || []).join(' ')));
-      updateFilterStatus(items.length, data.stacks.length);
-      content = table(['Stack', 'Services', 'Containers', ''], items.map(stackRow), emptyMsg('Compose stacks'));
+      const { rows, matchedCount } = buildContainerRows(q);
+      updateFilterStatus(matchedCount, data.containers.length);
+      nodes.push(table(
+        [
+          h('th', { class: 'col-status' }),
+          sortHeader('containers', 'Name', 'name'),
+          'Container ID',
+          'Image',
+          'Port(s)',
+          sortHeader('containers', 'Status', 'state'),
+          h('th', { class: 'col-act' }, 'Actions'),
+        ],
+        rows,
+        emptyMsg('containers')));
     } else if (activeTab === 'images') {
+      if (data.images.length > 0) nodes.push(imageUsageBar());
       let items = data.images.filter((img) => {
         if (imagesUnused && img.used_by && img.used_by.length > 0) return false;
-        return matches(q, imageName(img), img.id, (img.used_by || []).join(' '));
+        const p = imageParts(img);
+        return matches(q, p.repo, p.tag, p.label, img.id, (img.used_by || []).join(' '));
       });
       const s = sorts.images;
       if (s.key) {
@@ -2806,15 +2880,24 @@ function mountDocker(host, box) {
             ? (a.size || 0) - (b.size || 0)
             : s.key === 'created'
               ? Date.parse(a.created || 0) - Date.parse(b.created || 0)
-              : imageName(a).localeCompare(imageName(b));
+              : imageParts(a).label.localeCompare(imageParts(b).label);
           return s.asc ? d : -d;
         });
       }
       updateFilterStatus(items.length, data.images.length);
-      content = table(
-        [sortHeader('images', 'Image', 'name'), sortHeader('images', 'Size', 'size', false), sortHeader('images', 'Created', 'created', false), 'Used by', ''],
+      nodes.push(table(
+        [
+          h('th', { class: 'col-dot' }),
+          sortHeader('images', 'Name', 'name'),
+          'Tag',
+          'Image ID',
+          sortHeader('images', 'Created', 'created', false),
+          sortHeader('images', 'Size', 'size', false),
+          'Used by',
+          h('th', { class: 'col-act' }, 'Actions'),
+        ],
         items.map(imageRow),
-        emptyMsg('images'));
+        emptyMsg('images')));
     } else if (activeTab === 'volumes') {
       let items = data.volumes.filter((vol) => {
         if (volumeType === 'named' && vol.anonymous) return false;
@@ -2832,112 +2915,430 @@ function mountDocker(host, box) {
         });
       }
       updateFilterStatus(items.length, data.volumes.length);
-      content = table(
-        [sortHeader('volumes', 'Volume', 'name'), 'Used by', sortHeader('volumes', 'Stack', 'project'), 'Where'],
+      nodes.push(table(
+        [
+          h('th', { class: 'col-dot' }),
+          sortHeader('volumes', 'Name', 'name'),
+          'Used by',
+          sortHeader('volumes', 'Stack', 'project'),
+          'Where',
+          h('th', { class: 'col-act' }, 'Actions'),
+        ],
         items.map(volumeRow),
-        emptyMsg('volumes'));
+        emptyMsg('volumes')));
     } else if (activeTab === 'networks') {
-      note = 'Containers on the same network reach each other by name.';
+      nodes.push(h('p', { class: 'sub docker-note' }, 'Containers on the same network reach each other by name.'));
       const items = data.networks.filter((net) => matches(
         q, net.name, net.driver,
         (net.containers || []).map((m) => m.name + ' ' + (m.address || '')).join(' ')));
       updateFilterStatus(items.length, data.networks.length);
-      content = table(['Network', 'Driver', 'Containers'], items.map(networkRow), emptyMsg('networks'));
+      nodes.push(table(
+        [h('th', { class: 'col-dot' }), 'Network', 'Driver', 'Containers'],
+        items.map(networkRow),
+        emptyMsg('networks')));
     }
 
-    if (note) tableWrap.replaceChildren(h('p', { class: 'sub docker-note' }, note), content);
-    else tableWrap.replaceChildren(content);
+    tableWrap.replaceChildren(...nodes);
   }
 
-  function stackRow(stack) {
-    const missing = stack.missing_files && stack.missing_files.length > 0;
-    const restartBtn = button('Restart', 'btn btn-small', () => stackDialog(stack, 'restart'));
-    if (missing) restartBtn.disabled = true;
+  function buildContainerRows(q) {
+    const stackMap = new Map(data.stacks.map((s) => [s.project, s]));
+    const grouped = new Map();
+    const standalone = [];
+    for (const c of data.containers) {
+      if (c.project) {
+        if (!grouped.has(c.project)) grouped.set(c.project, []);
+        grouped.get(c.project).push(c);
+      } else {
+        standalone.push(c);
+      }
+    }
+
+    const containerMatches = (c) => matches(q, c.name, c.id, c.image, c.project, c.service, c.state, c.status, (c.ports || []).join(' '));
+    const entries = [];
+    let matchedCount = 0;
+
+    for (const [project, members] of grouped.entries()) {
+      const stack = stackMap.get(project) || {
+        project,
+        working_dir: '',
+        missing_files: [],
+        services: [],
+        running: members.filter((c) => c.state === 'running').length,
+        total: members.length,
+        command: '',
+      };
+      const byState = runningOnly ? members.filter((c) => c.state === 'running') : members;
+      const stackMatch = q && matches(q, stack.project, stack.working_dir, (stack.services || []).join(' '));
+      const visible = stackMatch ? byState : byState.filter(containerMatches);
+      if (visible.length === 0) continue;
+      matchedCount += visible.length;
+      entries.push({ kind: 'stack', name: project, running: stack.running > 0, stack, children: visible });
+    }
+
+    for (const c of standalone) {
+      if (runningOnly && c.state !== 'running') continue;
+      if (!containerMatches(c)) continue;
+      matchedCount++;
+      entries.push({ kind: 'container', name: c.name, running: c.state === 'running', container: c });
+    }
+
+    const s = sorts.containers;
+    if (s.key) {
+      entries.sort((a, b) => {
+        const d = s.key === 'name'
+          ? a.name.localeCompare(b.name)
+          : (a.running ? 0 : 1) - (b.running ? 0 : 1) || a.name.localeCompare(b.name);
+        return s.asc ? d : -d;
+      });
+    }
+
+    const rows = [];
+    for (const entry of entries) {
+      if (entry.kind === 'stack') {
+        const expanded = Boolean(q) || expandedStacks.has(entry.name);
+        rows.push(stackRow(entry.stack, expanded));
+        if (expanded) {
+          for (const child of entry.children) rows.push(containerRow(child, true));
+        }
+      } else {
+        rows.push(containerRow(entry.container, false));
+      }
+    }
+    return { rows, matchedCount };
+  }
+
+  function stackRow(stack, expanded) {
+    const missing = !stack.command || (stack.missing_files && stack.missing_files.length > 0);
+    const anyRunning = stack.running > 0;
+    const dotKind = stack.running === stack.total && stack.total > 0
+      ? 'running'
+      : anyRunning ? 'partial' : 'stopped';
+    const toggle = () => {
+      if (expandedStacks.has(stack.project)) expandedStacks.delete(stack.project);
+      else expandedStacks.add(stack.project);
+      renderContent();
+    };
+    const chev = h('button', {
+      type: 'button',
+      class: 'docker-chevron' + (expanded ? ' open' : ''),
+      'aria-expanded': expanded ? 'true' : 'false',
+      'aria-label': (expanded ? 'Collapse ' : 'Expand ') + stack.project,
+    }, icon(ICON_CHEVRON));
+    chev.addEventListener('click', toggle);
+
+    const primaryBtn = anyRunning
+      ? iconOnly('Down stack', ICON_STOP, () => stackDialog(stack, 'down'), 'docker-act-primary')
+      : iconOnly('Up stack', ICON_PLAY, () => stackDialog(stack, 'up'), 'docker-act-primary');
+    if (missing) primaryBtn.disabled = true;
+
     const menu = moreButton([
-      { label: 'Up', run: () => stackDialog(stack, 'up') },
-      { label: 'Down', danger: true, run: () => stackDialog(stack, 'down') },
+      anyRunning ? { label: 'Up', run: () => stackDialog(stack, 'up') } : null,
+      { label: 'Restart stack', run: () => stackDialog(stack, 'restart') },
+      !anyRunning ? { label: 'Down', danger: true, run: () => stackDialog(stack, 'down') } : null,
       { label: 'Down and up again', danger: true, run: () => stackDialog(stack, 'recycle') },
     ], missing);
-    return row(
+
+    return row('docker-stack-row',
+      h('td', { class: 'col-status' }, h('div', { class: 'docker-status-cell' }, chev, statusDot(dotKind, stack.running + ' of ' + stack.total + ' running'))),
       h('td', {},
-        button(stack.project, 'link-button name', () => showStackContainers(stack.project)),
-        h('div', { class: 'sub mono' }, stack.working_dir || ''),
-        missing ? h('div', { class: 'danger-text' }, 'The compose file ' + stack.missing_files[0] + ' no longer exists on this host.') : null),
-      h('td', {}, list(stack.services)),
-      h('td', { class: stack.running < stack.total ? 'warn' : null }, stack.running + ' of ' + stack.total + ' running'),
-      actions(restartBtn, menu));
+        button(stack.project, 'link-button name', toggle),
+        h('span', { class: 'tag' }, stack.running + '/' + stack.total),
+        stack.working_dir ? h('div', { class: 'sub mono' }, stack.working_dir) : null,
+        stack.missing_files && stack.missing_files.length > 0
+          ? h('div', { class: 'danger-text' }, 'Compose file missing: ' + stack.missing_files[0])
+          : null),
+      h('td', { class: 'sub' }, '—'),
+      h('td', { class: 'sub' }, '—'),
+      h('td', { class: 'sub' }, '—'),
+      h('td', { class: stack.running < stack.total && anyRunning ? 'warn' : 'sub' }, stack.running + ' of ' + stack.total + ' running'),
+      actions(primaryBtn, menu));
   }
 
-  function containerRow(c) {
+  function containerRow(c, isChild) {
     const running = c.state === 'running';
-    const primary = running
-      ? button('Stop', 'btn btn-small', () => containerDialog(c, 'stop'))
-      : button('Start', 'btn btn-small', async () => { // harmless, so no dialog: the result shows on the line above
-        const result = await attempt('start', { container: c.name });
-        if (disposed) return;
-        if (result.ok) afterChange(result, 'Started.');
-        else showMessage(failureText(result), null, true);
-      });
+    const cid = shortId(c.id);
+    const primaryBtn = running
+      ? iconOnly('Stop', ICON_STOP, () => containerDialog(c, 'stop'), 'docker-act-primary')
+      : iconOnly('Start', ICON_PLAY, () => startContainer(c), 'docker-act-primary');
     const menu = moreButton([
-      { label: 'Inspect', run: () => inspectDialog(c) },
+      { label: 'View logs', run: () => openContainerDetail(c.name, 'logs') },
+      { label: 'Inspect', run: () => openContainerDetail(c.name, 'inspect') },
+      { label: 'Mounts', run: () => openContainerDetail(c.name, 'mounts') },
       running ? { label: 'Restart', run: () => containerDialog(c, 'restart') } : null,
-      { label: 'Remove', danger: true, run: () => containerDialog(c, 'remove') },
+      { label: 'Copy container ID', run: () => copyText(cid) },
     ]);
-    return row(
-      h('td', {}, h('span', { class: 'name' }, c.name),
-        c.project ? h('div', { class: 'sub' }, c.project + ' / ' + c.service) : null),
-      h('td', {}, h('span', { class: 'mono' }, c.image),
-        // Which commit runs here: the delivery question of the course.
+    const deleteBtn = iconOnly('Remove', ICON_DELETE, () => containerDialog(c, 'remove'), 'danger-text');
+
+    return row(isChild ? 'docker-child-row' : '',
+      h('td', { class: 'col-status' }, h('div', { class: 'docker-status-cell' },
+        h('span', { class: 'docker-chevron-spacer' }),
+        statusDot(running ? 'running' : 'stopped', c.state))),
+      h('td', {},
+        button(c.name, 'link-button name', () => openContainerDetail(c.name)),
+        isChild && c.service && c.service !== c.name ? h('div', { class: 'sub' }, c.service) : null),
+      h('td', {}, h('span', { class: 'docker-id mono' }, cid, copyMini(cid, 'Copy container ID'))),
+      h('td', {},
+        button(c.image, 'link-button mono', () => jumpToImage(c.image)),
         c.revision ? h('div', { class: 'sub mono', title: c.revision }, 'commit ' + c.revision.slice(0, 7)) : null),
-      h('td', {}, running ? h('span', {}, h('span', { class: 'dot' }), 'running') : h('span', { class: 'sub' }, c.state),
-        h('div', { class: 'sub' }, c.status)),
       h('td', { class: 'mono' }, list(c.ports)),
-      actions(button('Logs', 'btn btn-small', () => logsDialog(c)), primary, menu));
+      h('td', { class: running ? null : 'sub' }, c.status || c.state),
+      actions(primaryBtn, menu, deleteBtn));
+  }
+
+  function imageUsageBar() {
+    const total = data.images.reduce((n, img) => n + (img.size || 0), 0);
+    const inUse = data.images
+      .filter((img) => img.used_by && img.used_by.length > 0)
+      .reduce((n, img) => n + (img.size || 0), 0);
+    const pct = total > 0 ? Math.min(100, Math.round((inUse / total) * 100)) : 0;
+    const fill = h('div', { class: 'docker-usage-fill' });
+    fill.style.width = pct + '%';
+    return h('div', { class: 'docker-usage' },
+      h('div', { class: 'docker-usage-track' }, fill),
+      h('span', { class: 'sub num' },
+        formatBytes(inUse) + ' / ' + formatBytes(total) + ' in use · ' + count(data.images.length, 'image', 'images')));
   }
 
   function imageRow(img) {
-    const name = imageName(img);
-    return row(
-      h('td', { class: 'mono' }, name, img.dangling ? h('span', { class: 'tag' }, 'dangling') : null),
-      h('td', { class: 'num' }, formatBytes(img.size)),
+    const p = imageParts(img);
+    const iid = shortId(img.id);
+    const inUse = img.used_by && img.used_by.length > 0;
+    return row('',
+      h('td', { class: 'col-dot' }, statusDot(inUse ? 'running' : 'stopped', inUse ? 'In use' : 'Unused')),
+      h('td', { class: 'mono', title: p.label },
+        p.repo,
+        p.extra > 0 ? h('span', { class: 'tag' }, '+' + p.extra) : null),
+      h('td', { class: 'mono' }, img.dangling ? h('span', { class: 'tag' }, '<none>') : p.tag),
+      h('td', {}, h('span', { class: 'docker-id mono' }, iid, copyMini(iid, 'Copy image ID'))),
       h('td', { class: 'sub' }, relativeTime(img.created)),
-      h('td', {}, list(img.used_by)),
-      actions(button('Remove', 'btn btn-small btn-danger-text', () => imageDialog(img, name))));
+      h('td', { class: 'num' }, formatBytes(img.size)),
+      h('td', {}, containerLinks(img.used_by)),
+      actions(iconOnly('Remove image', ICON_DELETE, () => imageDialog(img, p.label), 'danger-text')));
   }
 
   function volumeRow(vol) {
-    return row(
-      h('td', {}, h('span', { class: 'mono' }, vol.anonymous ? vol.name.slice(0, 12) + '…' : vol.name),
+    const inUse = vol.used_by && vol.used_by.length > 0;
+    return row('',
+      h('td', { class: 'col-dot' }, statusDot(inUse ? 'running' : 'stopped', inUse ? 'In use' : 'Unused')),
+      h('td', {},
+        h('span', { class: 'mono', title: vol.name }, vol.anonymous ? vol.name.slice(0, 12) + '…' : vol.name),
         h('span', { class: 'tag' }, vol.anonymous ? 'anonymous' : 'named')),
-      h('td', {}, list(vol.used_by)),
+      h('td', {}, containerLinks(vol.used_by)),
       h('td', {}, vol.project || '—'),
-      h('td', { class: 'sub mono' }, vol.mountpoint));
+      h('td', { class: 'sub mono' }, vol.mountpoint),
+      actions(copyMini(vol.mountpoint || vol.name, 'Copy mountpoint')));
   }
 
   function networkRow(net) {
     const members = (net.containers || []).map((m) => m.name + (m.address ? ' (' + m.address + ')' : ''));
-    return row(h('td', {}, h('span', { class: 'name' }, net.name)), h('td', {}, net.driver), h('td', {}, list(members)));
+    const inUse = members.length > 0;
+    return row('',
+      h('td', { class: 'col-dot' }, statusDot(inUse ? 'running' : 'stopped', inUse ? 'In use' : 'Empty')),
+      h('td', {}, h('span', { class: 'name' }, net.name)),
+      h('td', {}, net.driver),
+      h('td', {}, list(members)));
+  }
+
+  // ---- inline Container Detail view (Logs | Inspect | Mounts)
+
+  function renderContainerDetail(c) {
+    const running = c.state === 'running';
+    const cid = shortId(c.id);
+    const crumb = h('div', { class: 'docker-detail-crumb sub' },
+      button('← Containers', 'link-button', () => {
+        selectedContainer = null;
+        renderAll();
+      }),
+      '/',
+      h('span', {}, c.name));
+
+    const actionNodes = [
+      running
+        ? iconButton('Stop', ICON_STOP, () => containerDialog(c, 'stop'))
+        : iconButton('Start', ICON_PLAY, () => startContainer(c)),
+      running ? iconButton('Restart', ICON_REFRESH, () => containerDialog(c, 'restart')) : null,
+      iconOnly('Remove', ICON_DELETE, () => containerDialog(c, 'remove'), 'danger-text'),
+    ].filter(Boolean);
+
+    const head = h('div', { class: 'docker-detail-head' },
+      h('div', {},
+        h('h2', { class: 'docker-detail-title' }, statusDot(running ? 'running' : 'stopped', c.state), c.name),
+        h('div', { class: 'docker-detail-meta sub' },
+          h('span', { class: 'docker-id mono' }, cid, copyMini(cid, 'Copy container ID')),
+          button(c.image, 'link-button mono', () => jumpToImage(c.image)),
+          c.ports && c.ports.length > 0 ? h('span', { class: 'mono' }, c.ports.join(', ')) : null,
+          c.project ? h('span', {}, c.project + ' / ' + c.service) : null,
+          h('span', {}, c.status || c.state))),
+      h('div', { class: 'docker-detail-actions' }, actionNodes));
+
+    const detailTabs = h('div', { class: 'docker-tabs', role: 'tablist' },
+      [
+        { id: 'logs', label: 'Logs' },
+        { id: 'inspect', label: 'Inspect' },
+        { id: 'mounts', label: 'Mounts' },
+      ].map((t) => {
+        const btn = h('button', {
+          type: 'button',
+          role: 'tab',
+          'aria-selected': detailTab === t.id ? 'true' : 'false',
+          class: 'docker-tab' + (detailTab === t.id ? ' active' : ''),
+        }, t.label);
+        btn.addEventListener('click', () => {
+          if (detailTab === t.id) return;
+          detailTab = t.id;
+          renderContainerDetail(c);
+        });
+        return btn;
+      }));
+
+    const panel = h('div');
+    tableWrap.replaceChildren(crumb, head, detailTabs, panel);
+
+    if (detailTab === 'logs') renderDetailLogs(c, panel);
+    else if (detailTab === 'inspect') renderDetailInspect(c, panel);
+    else renderDetailMounts(c, panel);
+  }
+
+  function renderDetailLogs(c, panel) {
+    const seq = ++detailReqSeq;
+    let rawLogs = '';
+    let truncated = false;
+
+    const tail = h('select', { class: 'input input-small', 'aria-label': 'Log lines' },
+      [100, 200, 500, 2000].map((n) => h('option', { value: String(n), selected: n === detailTail ? '' : null }, 'Last ' + n + ' lines')));
+    const filterInput = h('input', {
+      class: 'input input-small docker-log-filter', type: 'search', placeholder: 'Filter lines…', value: detailLogFilter,
+    });
+    const matchInfo = h('span', { class: 'sub num' });
+    const command = h('pre', { class: 'docker-command' }, '$ docker logs --tail ' + detailTail + ' ' + c.name);
+    const pre = h('pre', { class: 'docker-pre docker-pre-tall' }, 'Loading…');
+
+    const copyBtn = button('Copy', 'btn', async () => {
+      const ok = await copyText(pre.textContent);
+      copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+    const bottomBtn = iconOnly('Scroll to bottom', ICON_DOWN, () => { pre.scrollTop = pre.scrollHeight; });
+
+    function applyFilter() {
+      const q = filterInput.value.trim().toLowerCase();
+      if (!rawLogs) {
+        matchInfo.textContent = '';
+        pre.textContent = '(no output)';
+        return;
+      }
+      if (!q) {
+        matchInfo.textContent = '';
+        pre.textContent = rawLogs + (truncated ? '\n… (the beginning was cut to fit)' : '');
+        return;
+      }
+      const lines = rawLogs.split('\n');
+      const matched = lines.filter((line) => line.toLowerCase().includes(q));
+      matchInfo.textContent = matched.length + ' / ' + lines.length + ' lines';
+      pre.textContent = matched.length > 0 ? matched.join('\n') : '(no matching lines)';
+    }
+
+    async function loadLogs(force) {
+      const reqSeq = ++detailReqSeq;
+      const cached = !force && detailCache.name === c.name && detailCache.logs && detailCache.logs.tail === detailTail
+        ? detailCache.logs
+        : null;
+      const result = cached ? cached.result : await attempt('logs', { container: c.name, tail: detailTail });
+      if (disposed || reqSeq !== detailReqSeq) return;
+      if (result.ok) {
+        detailCache.name = c.name;
+        detailCache.logs = { tail: detailTail, result };
+        command.textContent = '$ ' + (result.data.command || '');
+        rawLogs = result.data.logs || '';
+        truncated = Boolean(result.data.truncated);
+        applyFilter();
+        pre.scrollTop = pre.scrollHeight;
+      } else {
+        command.textContent = '$ ' + ((result.data && result.data.command) || '');
+        pre.textContent = errorText(result);
+      }
+    }
+
+    tail.addEventListener('change', () => { detailTail = Number(tail.value); loadLogs(true); });
+    filterInput.addEventListener('input', () => { detailLogFilter = filterInput.value; applyFilter(); });
+
+    panel.replaceChildren(
+      h('div', { class: 'docker-toolbar' }, tail, filterInput, iconButton('Refresh', ICON_REFRESH, () => loadLogs(true)), copyBtn, bottomBtn, matchInfo),
+      command,
+      pre);
+    if (seq === detailReqSeq) loadLogs(false);
+  }
+
+  async function fetchInspect(c, force) {
+    if (!force && detailCache.name === c.name && detailCache.inspect) return detailCache.inspect;
+    const result = await attempt('inspect', { container: c.name });
+    if (result.ok) {
+      detailCache.name = c.name;
+      detailCache.inspect = result;
+    }
+    return result;
+  }
+
+  function renderDetailInspect(c, panel) {
+    const command = h('pre', { class: 'docker-command' }, '$ docker inspect ' + c.name);
+    const pre = h('pre', { class: 'docker-pre docker-pre-tall' }, 'Loading…');
+    const copyBtn = button('Copy', 'btn', async () => {
+      const ok = await copyText(pre.textContent);
+      copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+
+    async function load(force) {
+      const reqSeq = ++detailReqSeq;
+      const result = await fetchInspect(c, force);
+      if (disposed || reqSeq !== detailReqSeq) return;
+      command.textContent = '$ ' + ((result.data && result.data.command) || '');
+      pre.textContent = result.ok
+        ? '// environment values are hidden\n' + JSON.stringify(result.data.inspect, null, 2)
+        : errorText(result);
+    }
+
+    panel.replaceChildren(
+      h('div', { class: 'docker-toolbar' }, iconButton('Refresh', ICON_REFRESH, () => load(true)), copyBtn),
+      command,
+      pre);
+    load(false);
+  }
+
+  function renderDetailMounts(c, panel) {
+    const body = h('div', { style: 'margin-top: 12px;' }, h('p', { class: 'sub' }, 'Loading…'));
+
+    async function load(force) {
+      const reqSeq = ++detailReqSeq;
+      const result = await fetchInspect(c, force);
+      if (disposed || reqSeq !== detailReqSeq) return;
+      if (!result.ok) {
+        body.replaceChildren(h('div', { class: 'danger-text' }, errorText(result)));
+        return;
+      }
+      const mounts = (result.data.inspect && result.data.inspect.Mounts) || [];
+      body.replaceChildren(table(
+        ['Type', 'Source', 'Destination', 'Mode'],
+        mounts.map((m) => row('',
+          h('td', {}, h('span', { class: 'tag' }, m.Type || 'mount')),
+          h('td', { class: 'mono' }, m.Source
+            ? h('span', { class: 'docker-id' }, m.Source, copyMini(m.Source, 'Copy source path'))
+            : (m.Name || '—')),
+          h('td', { class: 'mono' }, m.Destination || '—'),
+          h('td', { class: 'sub' }, m.RW === false ? 'ro' : 'rw'))),
+        'No mounts.'));
+    }
+
+    panel.replaceChildren(
+      h('div', { class: 'docker-toolbar' }, iconButton('Refresh', ICON_REFRESH, () => load(true))),
+      body);
+    load(false);
   }
 
   // ---- dialogs: each shows the command it will run, and names the object
 
   const commandLine = (command) => h('pre', { class: 'docker-command' }, '$ ' + command);
-
-  async function copyText(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (err) {
-      const area = h('textarea', { class: 'clipboard-helper', readonly: '', 'aria-hidden': 'true' });
-      area.value = text;
-      document.body.append(area);
-      area.select();
-      let copied = false;
-      try { copied = document.execCommand('copy'); } catch (e) { /* stays false */ }
-      area.remove();
-      return copied;
-    }
-  }
 
   function commandDialog({ title, text, command, confirmLabel, danger, op, fields, doneText }) {
     openDialog({
@@ -3042,94 +3443,6 @@ function mountDocker(host, box) {
         showMessage('Removed ' + count(removed, 'item', 'items') + ', reclaimed ' + formatBytes(result.data.space_reclaimed || 0) + '.', result.data.command, false);
         reload();
         return null;
-      },
-    });
-  }
-
-  // Logs and Inspect are reads: a window with the text and the command behind it.
-  function textDialog({ title, load, toolbar }) {
-    const command = h('pre', { class: 'docker-command' });
-    const pre = h('pre', { class: 'docker-pre' }, 'Loading…');
-    const copyBtn = button('Copy', 'btn', async () => {
-      const ok = await copyText(pre.textContent);
-      copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-    });
-    const run = async () => {
-      const result = await load(pre);
-      if (disposed) return;
-      command.textContent = '$ ' + ((result.data && result.data.command) || '');
-      if (result.ok) {
-        if (result.text !== undefined) pre.textContent = result.text;
-      } else {
-        pre.textContent = errorText(result);
-      }
-      pre.scrollTop = pre.scrollHeight; // logs: the newest line is at the bottom
-    };
-    const barNodes = toolbar ? toolbar(run, pre, copyBtn) : h('div', { class: 'docker-toolbar' }, copyBtn);
-    openDialog({
-      title, wide: true, cancelLabel: null, submitLabel: 'Close',
-      fields: [barNodes, command, pre],
-      onSubmit: async () => null,
-    });
-    run();
-  }
-
-  function logsDialog(c) {
-    let rawLogs = '';
-    let truncated = false;
-    let preEl = null;
-    const tail = h('select', { class: 'input input-small' },
-      [100, 200, 500, 2000].map((n) => h('option', { value: String(n), selected: n === 200 ? '' : null }, 'Last ' + n + ' lines')));
-    const filterInput = h('input', { class: 'input input-small docker-log-filter', type: 'search', placeholder: 'Filter lines…' });
-    const matchInfo = h('span', { class: 'sub num' });
-
-    function applyFilter() {
-      if (!preEl) return;
-      const q = filterInput.value.trim().toLowerCase();
-      if (!rawLogs) {
-        matchInfo.textContent = '';
-        preEl.textContent = '(no output)';
-        return;
-      }
-      if (!q) {
-        matchInfo.textContent = '';
-        preEl.textContent = rawLogs + (truncated ? '\n… (the beginning was cut to fit)' : '');
-        return;
-      }
-      const lines = rawLogs.split('\n');
-      const matched = lines.filter((line) => line.toLowerCase().includes(q));
-      matchInfo.textContent = matched.length + ' / ' + lines.length + ' lines';
-      preEl.textContent = matched.length > 0 ? matched.join('\n') : '(no matching lines)';
-    }
-
-    textDialog({
-      title: 'Logs of ' + c.name,
-      toolbar: (run, pre, copyBtn) => {
-        preEl = pre;
-        tail.addEventListener('change', run);
-        filterInput.addEventListener('input', applyFilter);
-        return h('div', { class: 'docker-toolbar' }, tail, filterInput, button('Refresh', 'btn', run), copyBtn, matchInfo);
-      },
-      load: async () => {
-        const result = await attempt('logs', { container: c.name, tail: Number(tail.value) });
-        if (result.ok) {
-          rawLogs = result.data.logs || '';
-          truncated = Boolean(result.data.truncated);
-          applyFilter();
-        }
-        return result;
-      },
-    });
-  }
-
-  function inspectDialog(c) {
-    textDialog({
-      title: 'Inspect ' + c.name,
-      load: async () => {
-        const result = await attempt('inspect', { container: c.name });
-        if (result.ok) result.text = '// environment values are hidden\n' + JSON.stringify(result.data.inspect, null, 2);
-        return result;
       },
     });
   }
