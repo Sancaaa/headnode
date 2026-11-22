@@ -156,8 +156,9 @@ tr:hover .name { color: var(--text-link); }
 /* The Hosts table: every cell is centered vertically, so a one-line status
    and a two-line addresses cell sit on the same middle line as the name. */
 .hosts-table td { vertical-align: middle; }
-.hosts-table .col-act { width: 200px; }
-.host-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.hosts-table .col-act { width: 204px; }
+.host-actions { display: inline-grid; grid-template-columns: repeat(2, 94px); gap: 6px; vertical-align: middle; }
+.host-actions > .btn:only-child { grid-column: 2; }
 .lan { font-weight: 600; }
 .col-host { width: 30%; }
 .col-addr { width: 24%; }
