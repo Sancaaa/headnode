@@ -149,3 +149,55 @@ func TestEnrollEndpoint(t *testing.T) {
 		}
 	})
 }
+
+func TestEnrollIsRateLimited(t *testing.T) {
+	db := openTestDB(t)
+	srv := httptest.NewServer(New(db).Handler())
+	defer srv.Close()
+
+	token, _, err := CreateEnrollToken(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	postFrom := func(req protocol.EnrollRequest, forwardedIP string) *http.Response {
+		t.Helper()
+		body, _ := json.Marshal(req)
+		httpReq, err := http.NewRequest("POST", srv.URL+"/agent/enroll", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if forwardedIP != "" {
+			httpReq.Header.Set("X-Forwarded-For", forwardedIP)
+		}
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	bad := protocol.EnrollRequest{Token: "wrong-token", Hostname: "probe", OS: "linux", Arch: "amd64"}
+	for i := 1; i <= 4; i++ {
+		if resp := postFrom(bad, "203.0.113.50"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i, resp.StatusCode)
+		}
+	}
+
+	// The 5th attempt from the same IP is rate-limited even with a valid token.
+	good := protocol.EnrollRequest{Token: token, Hostname: "real-host", OS: "linux", Arch: "amd64"}
+	resp := postFrom(good, "203.0.113.50")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("5th attempt from blocked IP: status = %d, want 429", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("429 response missing Retry-After header")
+	}
+
+	// Another IP is not blocked.
+	if resp := postFrom(good, "198.51.100.77"); resp.StatusCode != http.StatusOK {
+		t.Errorf("valid enroll from another IP: status = %d, want 200", resp.StatusCode)
+	}
+}

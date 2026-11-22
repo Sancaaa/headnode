@@ -33,10 +33,12 @@ func (s *Server) UseAgentDir(dir string) {
 // server is the enroll token, not the binary.
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	// VERSION is the one other file: the version of what is in the folder, which the
-	// agent's `update` command reads to see whether it is behind (D-67). A few
-	// characters, with no secret in them, like the programs.
-	if !agentBinaries[name] && name != "VERSION" {
+	// VERSION and SHA256SUMS are the only non-binary files served here: the
+	// agent's `update` command reads VERSION to check whether it is behind and
+	// SHA256SUMS to verify the downloaded binary before running or installing it
+	// (D-67). Neither holds any secret.
+	isText := name == "VERSION" || name == "SHA256SUMS"
+	if !agentBinaries[name] && !isText {
 		writeError(w, http.StatusNotFound, "unknown download")
 		return
 	}
@@ -61,7 +63,7 @@ func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if name == "VERSION" {
+	if isText {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")

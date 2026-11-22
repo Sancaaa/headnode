@@ -128,3 +128,31 @@ func TestAgentBinaryThatIsAFolderIsRefused(t *testing.T) {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestSHA256SUMSIsServedOnAllowlist(t *testing.T) {
+	s, srv, _, _ := newTestServer(t)
+	if resp, _ := get(t, srv.URL+"/download/SHA256SUMS", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("without agentDir: status = %d, want 404", resp.StatusCode)
+	}
+
+	dir := t.TempDir()
+	s.UseAgentDir(dir)
+	if resp, _ := get(t, srv.URL+"/download/SHA256SUMS", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("before SHA256SUMS exists: status = %d, want 404", resp.StatusCode)
+	}
+
+	content := strings.Repeat("a", 64) + "  headnode-agent-linux-amd64\n"
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := get(t, srv.URL+"/download/SHA256SUMS", nil)
+	if resp.StatusCode != http.StatusOK || body != content {
+		t.Fatalf("GET /download/SHA256SUMS: status = %d, body %q, want 200 and checksums", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", got)
+	}
+}

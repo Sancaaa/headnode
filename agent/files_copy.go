@@ -127,12 +127,21 @@ func copyOne(src, dst string, info fs.FileInfo) error {
 	if !info.Mode().IsRegular() {
 		return errSpecial
 	}
+	if isSecretFile(info) {
+		return errSecretFile
+	}
 
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	// Check the opened file descriptor too so a swap after Lstat cannot slip through.
+	if openedInfo, err := in.Stat(); err != nil {
+		return err
+	} else if isSecretFile(openedInfo) {
+		return errSecretFile
+	}
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
@@ -171,6 +180,15 @@ func chmodPath(p, mode string) error {
 	perm, err := parseMode(mode)
 	if err != nil {
 		return err
+	}
+	// Stat, not Lstat: os.Chmod follows symlinks, so a link to agent.json must
+	// be refused just like agent.json itself.
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if isSecretFile(info) {
+		return errSecretFile
 	}
 	return os.Chmod(abs, perm)
 }

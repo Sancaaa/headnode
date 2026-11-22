@@ -49,18 +49,32 @@ const vncProbeEvery = time.Minute
 // beat and only the first beat of each minute costs a connection.
 type vncProbe struct {
 	addr   string // empty means vncAddress; tests point it at their own listener
+	socket string // optional Unix socket override for tests; empty checks vncSocketPath() when addr == ""
 	at     time.Time
 	listen bool
 }
 
-// listening reports whether something accepts connections on the VNC port.
+// listening reports whether something accepts connections on the VNC endpoint
+// (either our private wayvnc Unix socket on Wayland, or loopback TCP 5900).
 //
 // It connects and hangs up at once instead of, say, trying to bind the port and
 // seeing it fail: that gives the same answer on Linux and Windows, and needs no
-// rights. The dial is on the loopback address, so it never leaves the machine.
+// rights. The dial never leaves the machine.
 func (p *vncProbe) listening() bool {
 	if !p.at.IsZero() && time.Since(p.at) < vncProbeEvery {
 		return p.listen
+	}
+	sock := p.socket
+	if sock == "" && p.addr == "" {
+		sock = vncSocketPath()
+	}
+	if sock != "" {
+		if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+			conn.Close()
+			p.listen = true
+			p.at = time.Now()
+			return true
+		}
 	}
 	addr := p.addr
 	if addr == "" {

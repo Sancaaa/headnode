@@ -14,3 +14,5 @@ func setVNCService(enabled bool) error {
 }
 
 func vncPassword() string { return "" }
+
+func vncSocketPath() string { return "" }

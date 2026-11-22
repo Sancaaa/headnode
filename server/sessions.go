@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,11 +31,13 @@ const browserTunnelPort = "5900"
 // The browser's handler does the relaying. The agent's handler only hands over
 // its connection and waits, so exactly one goroutine ever copies bytes.
 type session struct {
-	id      string
-	userID  int64  // the one user who may attach a browser
-	agentID string // the one agent that may attach
-	kind    string
-	opened  time.Time
+	id           string
+	userID       int64  // the one user who may attach a browser
+	agentID      string // the one agent (host) that may attach
+	kind         string
+	need         action // permission required to attach and to keep the session open
+	webTokenHash string // hash of the login token that created this session
+	opened       time.Time
 
 	agentConn chan *websocket.Conn // the agent's side, handed to the browser's handler
 	done      chan struct{}        // closed when the session is over, whichever way
@@ -91,20 +94,22 @@ func newSessionTable(pairTimeout time.Duration) *sessionTable {
 }
 
 // create makes a session and starts its countdown.
-func (t *sessionTable) create(userID int64, agentID, kind string) (*session, error) {
+func (t *sessionTable) create(userID int64, agentID, kind string, need action, webTokenHash string) (*session, error) {
 	// 128 random bits: nobody can guess a session id (architecture.md §3.2).
 	suffix, err := randomHex(16)
 	if err != nil {
 		return nil, err
 	}
 	sess := &session{
-		id:        "s_" + suffix,
-		userID:    userID,
-		agentID:   agentID,
-		kind:      kind,
-		opened:    time.Now(),
-		agentConn: make(chan *websocket.Conn, 1),
-		done:      make(chan struct{}),
+		id:           "s_" + suffix,
+		userID:       userID,
+		agentID:      agentID,
+		kind:         kind,
+		need:         need,
+		webTokenHash: webTokenHash,
+		opened:       time.Now(),
+		agentConn:    make(chan *websocket.Conn, 1),
+		done:         make(chan struct{}),
 	}
 	t.mu.Lock()
 	t.byID[sess.id] = sess
@@ -122,22 +127,98 @@ func (t *sessionTable) create(userID int64, agentID, kind string) (*session, err
 	return sess, nil
 }
 
-// endUser ends every session a user has, waiting or running, and returns how many. It is
-// what makes disabling a user, or resetting their password, cut off a shell that is open
-// right now (D-69): each running relay watches its session's done channel.
-func (t *sessionTable) endUser(userID int64) int {
+// endWhere ends every waiting or running session matching match, and returns how many.
+// Each running relay watches its session's done channel, so ending a session cuts off
+// both sides immediately.
+func (t *sessionTable) endWhere(match func(*session) bool) int {
 	t.mu.Lock()
-	var mine []*session
+	var victims []*session
 	for _, sess := range t.byID {
-		if sess.userID == userID {
-			mine = append(mine, sess)
+		if match(sess) {
+			victims = append(victims, sess)
 		}
 	}
 	t.mu.Unlock()
-	for _, sess := range mine { // outside the lock: end takes it
+	for _, sess := range victims { // outside the lock: end takes it
 		t.end(sess)
 	}
-	return len(mine)
+	return len(victims)
+}
+
+// endUser ends every session a user has, waiting or running, and returns how many. It is
+// what makes disabling a user, or resetting their password, cut off a shell that is open
+// right now (D-69).
+func (t *sessionTable) endUser(userID int64) int {
+	return t.endWhere(func(sess *session) bool { return sess.userID == userID })
+}
+
+// endHost ends every session targeting a host (e.g. when the host is deleted).
+func (t *sessionTable) endHost(hostID string) int {
+	return t.endWhere(func(sess *session) bool { return sess.agentID == hostID })
+}
+
+// endWebSession ends every session opened by one specific login (cookie or bearer token).
+func (t *sessionTable) endWebSession(webTokenHash string) int {
+	if webTokenHash == "" {
+		return 0
+	}
+	return t.endWhere(func(sess *session) bool { return sess.webTokenHash == webTokenHash })
+}
+
+// endOtherWebSessions ends every session of userID except those belonging to exceptTokenHash.
+func (t *sessionTable) endOtherWebSessions(userID int64, exceptTokenHash string) int {
+	return t.endWhere(func(sess *session) bool {
+		return sess.userID == userID && sess.webTokenHash != exceptTokenHash
+	})
+}
+
+// snapshot returns all waiting or running sessions matching match, so callers can
+// check database permissions outside t.mu.
+func (t *sessionTable) snapshot(match func(*session) bool) []*session {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*session
+	for _, sess := range t.byID {
+		if match(sess) {
+			out = append(out, sess)
+		}
+	}
+	return out
+}
+
+// endUnauthorizedSessions re-checks each candidate session against current database
+// permissions and ends any that its owner is no longer allowed to hold.
+func (s *Server) endUnauthorizedSessions(candidates []*session) int {
+	ended := 0
+	for _, sess := range candidates {
+		if !s.userStillAllowed(sess.userID, sess.agentID, sess.need) {
+			s.sessions.end(sess)
+			ended++
+		}
+	}
+	return ended
+}
+
+func (s *Server) userStillAllowed(userID int64, hostID string, a action) bool {
+	var admin, disabled int
+	err := s.db.QueryRow(`SELECT is_admin, disabled FROM users WHERE id = ?`, userID).Scan(&admin, &disabled)
+	if err != nil || disabled == 1 {
+		return false
+	}
+	allowed, err := s.can(user{ID: userID, IsAdmin: admin == 1}, hostID, a)
+	return err == nil && allowed
+}
+
+func (s *Server) endUnauthorizedForUser(userID int64) int {
+	return s.endUnauthorizedSessions(s.sessions.snapshot(func(sess *session) bool {
+		return sess.userID == userID
+	}))
+}
+
+func (s *Server) endUnauthorizedForHost(hostID string) int {
+	return s.endUnauthorizedSessions(s.sessions.snapshot(func(sess *session) bool {
+		return sess.agentID == hostID
+	}))
 }
 
 func (t *sessionTable) get(id string) *session {
@@ -245,7 +326,7 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := s.hostExists(hostID)
+	osName, exists, err := s.hostOS(hostID)
 	if err != nil {
 		internalError(w, "look up host", err)
 		return
@@ -268,6 +349,7 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 	var kindParams any
 	readOnly := false
 	tunnelTarget := ""
+	need := actionShell
 	switch req.Kind {
 	case protocol.KindTunnel:
 		// A tunnel reaches anything the host can reach on its own loopback: its
@@ -337,12 +419,24 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "you do not have permission to browse files on this host")
 			return
 		}
+		// Windows hosts do not offer a file manager (D-47), and the Windows agent
+		// runs as LocalSystem: enforce this here so a direct API call cannot bypass
+		// the hidden UI button.
+		if osName == "windows" {
+			writeError(w, http.StatusBadRequest, "file manager sessions are not supported on Windows")
+			return
+		}
 		canWrite, err := s.can(u, hostID, actionFilesWrite)
 		if err != nil {
 			internalError(w, "check permission", err)
 			return
 		}
 		readOnly = !canWrite
+		if readOnly {
+			need = actionFilesRead
+		} else {
+			need = actionFilesWrite
+		}
 		kindParams = protocol.FilesParams{ReadOnly: readOnly}
 	}
 	params, err := json.Marshal(kindParams)
@@ -351,7 +445,7 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.sessions.create(u.ID, hostID, req.Kind)
+	sess, err := s.sessions.create(u.ID, hostID, req.Kind, need, currentTokenHash(r))
 	if err != nil {
 		internalError(w, "create session", err)
 		return
@@ -391,13 +485,15 @@ func (s *Server) handleOpenSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, reply)
 }
 
-// actionFor is what a user needs to be allowed to attach to a session of this
-// kind. Anything unknown needs the strictest one, which is also what docker needs.
-func actionFor(kind string) action {
-	if kind == protocol.KindFiles || kind == protocol.KindDownload {
-		return actionFilesRead
+func (s *Server) hostOS(id string) (osName string, exists bool, err error) {
+	err = s.db.QueryRow(`SELECT os FROM agents WHERE id = ?`, id).Scan(&osName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
 	}
-	return actionShell
+	if err != nil {
+		return "", false, fmt.Errorf("look up host: %w", err)
+	}
+	return osName, true, nil
 }
 
 func (s *Server) hostExists(id string) (bool, error) {
@@ -423,15 +519,15 @@ func (s *Server) handleUISession(w http.ResponseWriter, r *http.Request) {
 	}
 	u := currentUser(r)
 
-	// The id belongs to the user who asked for the session. Anyone else, and
-	// any unknown id, gets the same answer.
+	// The id belongs to the user and login session that asked for it. Anyone
+	// else, and any unknown id, gets the same answer.
 	sess := s.sessions.get(r.PathValue("id"))
-	if sess == nil || sess.userID != u.ID {
+	if sess == nil || sess.userID != u.ID || (sess.webTokenHash != "" && sess.webTokenHash != currentTokenHash(r)) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
 	// Permissions can change in the seconds between the two requests.
-	allowed, err := s.can(u, sess.agentID, actionFor(sess.kind))
+	allowed, err := s.can(u, sess.agentID, sess.need)
 	if err != nil {
 		internalError(w, "check permission", err)
 		return

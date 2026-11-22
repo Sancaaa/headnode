@@ -71,7 +71,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, path)
+	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, path, currentTokenHash(r))
 	if stream == nil {
 		if status != 0 { // 0: the browser went away while we waited
 			writeError(w, status, message)
@@ -146,8 +146,8 @@ func (f *hostFile) close() {
 //
 // On failure it returns nil with the HTTP status and message to answer with.
 // Status 0 means the caller's own request ended while we waited: answer nothing.
-func (s *Server) openHostFile(ctx context.Context, userID int64, hostID, path string) (*hostFile, int, string) {
-	sess, err := s.sessions.create(userID, hostID, protocol.KindDownload)
+func (s *Server) openHostFile(ctx context.Context, userID int64, hostID, path, webTokenHash string) (*hostFile, int, string) {
+	sess, err := s.sessions.create(userID, hostID, protocol.KindDownload, actionFilesRead, webTokenHash)
 	if err != nil {
 		slog.Error("create session", "err", err)
 		return nil, http.StatusInternalServerError, "internal error"

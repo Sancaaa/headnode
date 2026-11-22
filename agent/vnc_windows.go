@@ -143,3 +143,7 @@ func vncPassword() string {
 	}
 	return vncDecryptPassword(stored)
 }
+
+// vncSocketPath is empty on Windows: TightVNC listens on loopback TCP 5900 with
+// per-start VNC authentication (D-64).
+func vncSocketPath() string { return "" }

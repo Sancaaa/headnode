@@ -32,6 +32,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "go build failed for windows/amd64" }
     Write-Host ("built {0} ({1:N1} MB)" -f $target, ((Get-Item $target).Length / 1MB))
 
+    # SHA-256 checksums for every built binary, in standard sha256sum format
+    # ("<lowercase-hex>  <filename>"), verified by `headnode-agent update` before
+    # executing or installing a download. Written before VERSION so an interrupted
+    # build never announces a new version without matching checksums.
+    $sumLines = foreach ($name in "headnode-agent-linux-amd64", "headnode-agent-linux-arm64", "headnode-agent-windows-amd64.exe") {
+        $hash = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $Out $name)).Hash.ToLowerInvariant()
+        "$hash  $name"
+    }
+    [System.IO.File]::WriteAllText((Join-Path $Out "SHA256SUMS"), ($sumLines -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+    Write-Host ("wrote {0}" -f (Join-Path $Out "SHA256SUMS"))
+
     # The version of what was just built, for the dashboard's "update available" (D-66):
     # it is the Version constant of the agent package. Written last, so a failed build
     # leaves the old version in place.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -134,5 +135,32 @@ func TestLoginLimiterBeginThenResetForgets(t *testing.T) {
 	l.reset(ip) // the last one was the right password
 	if got := l.begin(ip); got != 0 {
 		t.Errorf("after a successful login: wait = %v, want 0", got)
+	}
+}
+
+func TestLoginLimiterEnforcesStrictMemoryCap(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+
+	// Flood with more than maxTracked distinct IPs within the forgetAfter window:
+	// none are expired, so the oldest entries must be evicted to stay capped.
+	for i := 0; i < maxTracked+500; i++ {
+		now = now.Add(time.Millisecond)
+		l.fail(fmt.Sprintf("198.51.%d.%d", i/256, i%256))
+		if len(l.byIP) > maxTracked {
+			t.Fatalf("after %d distinct IPs: len(byIP) = %d, exceeds cap %d", i+1, len(l.byIP), maxTracked)
+		}
+	}
+	if len(l.byIP) != maxTracked {
+		t.Errorf("len(byIP) = %d, want %d", len(l.byIP), maxTracked)
+	}
+	// The earliest IP was evicted; the most recent IP is still tracked.
+	if _, ok := l.byIP["198.51.0.0"]; ok {
+		t.Error("oldest IP should have been evicted")
+	}
+	newest := fmt.Sprintf("198.51.%d.%d", (maxTracked+499)/256, (maxTracked+499)%256)
+	if _, ok := l.byIP[newest]; !ok {
+		t.Errorf("newest IP %s should still be tracked", newest)
 	}
 }

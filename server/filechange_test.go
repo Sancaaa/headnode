@@ -191,11 +191,11 @@ func TestFinishedFilesSessionsAreRememberedBriefly(t *testing.T) {
 	table := newSessionTable(time.Hour)
 	table.keepFor = 50 * time.Millisecond
 
-	files, err := table.create(7, "agent-a", protocol.KindFiles)
+	files, err := table.create(7, "agent-a", protocol.KindFiles, actionFilesWrite, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := table.create(7, "agent-a", protocol.KindShell)
+	shell, err := table.create(7, "agent-a", protocol.KindShell, actionShell, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestFinishedFilesSessionsAreRememberedBriefly(t *testing.T) {
 	}
 
 	// The cleanup runs when the next session ends, so the map stays small.
-	next, err := table.create(8, "agent-b", protocol.KindFiles)
+	next, err := table.create(8, "agent-b", protocol.KindFiles, actionFilesWrite, "")
 	if err != nil {
 		t.Fatal(err)
 	}

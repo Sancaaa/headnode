@@ -167,11 +167,13 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "store new password", err)
 		return
 	}
-	ended, err := s.deleteSessionsOf(u.ID, currentTokenHash(r))
+	mine := currentTokenHash(r)
+	ended, err := s.deleteSessionsOf(u.ID, mine)
 	if err != nil {
 		internalError(w, "end other sessions", err)
 		return
 	}
+	s.sessions.endOtherWebSessions(u.ID, mine)
 	s.audit(u.ID, "", "password_change", fmt.Sprintf("other_sessions_ended=%d", ended))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -255,6 +257,7 @@ func (s *Server) handleRevokeMySession(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "delete session", err)
 		return
 	}
+	s.sessions.endWebSession(tokenHash)
 	s.audit(u.ID, "", "session_revoke", "client="+client)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -263,11 +266,13 @@ func (s *Server) handleRevokeMySession(w http.ResponseWriter, r *http.Request) {
 // everywhere else". The login making the request stays.
 func (s *Server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	ended, err := s.deleteSessionsOf(u.ID, currentTokenHash(r))
+	mine := currentTokenHash(r)
+	ended, err := s.deleteSessionsOf(u.ID, mine)
 	if err != nil {
 		internalError(w, "end other sessions", err)
 		return
 	}
+	s.sessions.endOtherWebSessions(u.ID, mine)
 	s.audit(u.ID, "", "sessions_revoke_others", fmt.Sprintf("ended=%d", ended))
 	writeJSON(w, http.StatusOK, map[string]int64{"ended": ended})
 }
@@ -440,6 +445,7 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		s.audit(actor.ID, "", "admin_grant", "user="+username)
 	}
 	if demoting {
+		s.endUnauthorizedForUser(id)
 		s.audit(actor.ID, "", "admin_revoke", "user="+username)
 	}
 

@@ -70,7 +70,11 @@ func setVNCService(enabled bool) error {
 	}
 	argv := append([]string{plan.name}, plan.args...)
 	if !enabled {
-		return stopVNCProcess(argv)
+		err := stopVNCProcess(argv)
+		if plan.socketPath != "" {
+			os.Remove(plan.socketPath)
+		}
+		return err
 	}
 	return startVNCProcess(plan, argv, dir)
 }
@@ -101,6 +105,10 @@ func startVNCProcess(plan vncPlan, argv []string, dir string) error {
 		if err := os.WriteFile(plan.config, []byte(plan.configText), 0o600); err != nil {
 			return fmt.Errorf("write the VNC server's config: %w", err)
 		}
+	}
+	if plan.socketPath != "" {
+		// Remove any stale socket left by a crashed process so wayvnc can bind it.
+		os.Remove(plan.socketPath)
 	}
 	if plan.passwordFile != "" {
 		// A new password every time the screen is turned on (D-64). 0600, in the
@@ -140,8 +148,17 @@ func startVNCProcess(plan vncPlan, argv []string, dir string) error {
 	}()
 	select {
 	case err := <-exited:
+		if plan.socketPath != "" {
+			os.Remove(plan.socketPath)
+		}
 		return fmt.Errorf("%s stopped as soon as it started (%v): see %s", plan.name, err, logPath)
 	case <-time.After(time.Second):
+		// Lock down the socket itself to 0600 in addition to its 0700 parent dir.
+		if plan.socketPath != "" {
+			if err := os.Chmod(plan.socketPath, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("restrict VNC socket permissions: %w", err)
+			}
+		}
 		return nil
 	}
 }
@@ -186,4 +203,18 @@ func vncPassword() string {
 		return ""
 	}
 	return vncDecryptPassword(stored)
+}
+
+// vncSocketPath returns the private Unix domain socket path used when the Linux
+// desktop is served by wayvnc, or "" when VNC uses TCP (x11vnc or no Wayland).
+func vncSocketPath() string {
+	dir, err := vncConfigDir()
+	if err != nil {
+		return ""
+	}
+	plan, ok := linuxVNCEnv().plan(dir)
+	if !ok {
+		return ""
+	}
+	return plan.socketPath
 }

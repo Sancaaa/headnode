@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/coder/websocket"
 
@@ -27,18 +28,25 @@ var listLimit = 2000
 // variable so a test can lower it.
 var walkLimit = 100000
 
+// filesSupported is false on Windows: Windows hosts have no file manager (D-47),
+// and the Windows agent runs as LocalSystem so a files session must be refused
+// here as well as on the server. A variable so WebSocket tests can run on a
+// Windows development machine.
+var filesSupported = runtime.GOOS != "windows"
+
 // The answers a person is meant to read. Anything else is described by the
 // operating system's own error, see describe.
 var (
-	errNotAbsolute = errors.New("path must be absolute")
-	errReadOnly    = errors.New("this session is read-only")
-	errUnknownOp   = errors.New("unknown operation")
-	errExists      = errors.New("destination already exists")
-	errDirExists   = errors.New("a folder with that name already exists")
-	errFileExists  = errors.New("a file with that name already exists")
-	errIntoItself  = errors.New("cannot copy a folder into itself")
-	errSpecial     = errors.New("cannot copy a special file (a device, socket or pipe)")
-	errRoot        = errors.New("refusing to delete the root directory")
+	errNotAbsolute      = errors.New("path must be absolute")
+	errReadOnly         = errors.New("this session is read-only")
+	errUnknownOp        = errors.New("unknown operation")
+	errExists           = errors.New("destination already exists")
+	errDirExists        = errors.New("a folder with that name already exists")
+	errFileExists       = errors.New("a file with that name already exists")
+	errIntoItself       = errors.New("cannot copy a folder into itself")
+	errSpecial          = errors.New("cannot copy a special file (a device, socket or pipe)")
+	errRoot             = errors.New("refusing to delete the root directory")
+	errFilesUnsupported = errors.New("file manager sessions are not supported on Windows")
 )
 
 // runFiles serves a file manager session: the browser sends one JSON request
@@ -50,6 +58,10 @@ var (
 // traffic (D-27), so the agent is the only one that sees what was asked and
 // what happened (D-37). It may be nil.
 func runFiles(ctx context.Context, conn *websocket.Conn, rawParams json.RawMessage, report func(protocol.FileChange)) error {
+	if !filesSupported {
+		conn.Close(websocket.StatusInternalError, errFilesUnsupported.Error())
+		return errFilesUnsupported
+	}
 	var params protocol.FilesParams
 	if len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &params); err != nil {
@@ -284,7 +296,13 @@ func renamePath(from, to string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(dst); err == nil {
+	if srcInfo, err := os.Lstat(src); err == nil && isSecretOrAncestor(srcInfo) {
+		return errSecretFile
+	}
+	if dstInfo, err := os.Lstat(dst); err == nil {
+		if isSecretFile(dstInfo) {
+			return errSecretFile
+		}
 		return errExists
 	}
 	return os.Rename(src, dst)
@@ -302,8 +320,12 @@ func deletePath(p string, recursive bool) error {
 	}
 	// RemoveAll reports success for a path that is not there. Looking first
 	// gives the person the honest answer.
-	if _, err := os.Lstat(abs); err != nil {
+	info, err := os.Lstat(abs)
+	if err != nil {
 		return err
+	}
+	if isSecretOrAncestor(info) {
+		return errSecretFile
 	}
 	if recursive {
 		return os.RemoveAll(abs)

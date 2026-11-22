@@ -212,6 +212,9 @@ func (s *Server) handlePatchHost(w http.ResponseWriter, r *http.Request) {
 		s.audit(actor, before.ID, "host_rename", "name="+before.Name+" -> "+newName)
 	}
 	if req.GroupID != nil && !sameGroup(before.GroupID, newGroup) {
+		// Moving a host out of a group revokes access for non-admin members of the
+		// old group: cut off any active sessions they no longer have rights for.
+		s.endUnauthorizedForHost(before.ID)
 		s.audit(actor, before.ID, "host_move", "group="+groupLabel(before.GroupName)+" -> "+groupLabel(newGroupName))
 	}
 
@@ -243,7 +246,10 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	}
 	// Delete first, disconnect second: if it were the other way round, the
 	// agent could reconnect in between, since its credentials would still be valid.
+	// Also terminate any active WebSocket sessions (shells, files, tunnels, docker)
+	// because they run on separate connections from the agent's control socket.
 	s.agents.disconnect(h.ID)
+	s.sessions.endHost(h.ID)
 
 	s.audit(currentUser(r).ID, h.ID, "host_delete", "name="+h.Name)
 	w.WriteHeader(http.StatusNoContent)

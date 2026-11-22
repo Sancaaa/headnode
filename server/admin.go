@@ -337,6 +337,10 @@ func (s *Server) handleSetMember(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "set member", err)
 		return
 	}
+	// If the role was lowered (e.g. operator -> viewer), cut off any open
+	// sessions that need rights this user no longer has (shells, tunnels, docker,
+	// or read-write file sessions).
+	s.endUnauthorizedForUser(userID)
 	s.audit(currentUser(r).ID, "", "member_set",
 		fmt.Sprintf("group=%s user=%s role=%s", groupName, username, req.Role))
 	w.WriteHeader(http.StatusNoContent)
@@ -410,6 +414,8 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user is not a member of this group")
 		return
 	}
+	// Cut off any active sessions the removed member holds on hosts in this group.
+	s.endUnauthorizedForUser(userID)
 	s.audit(currentUser(r).ID, "", "member_remove",
 		fmt.Sprintf("group=%s user=%s", groupName, username))
 	w.WriteHeader(http.StatusNoContent)

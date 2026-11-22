@@ -101,13 +101,30 @@ func writeText(p, content, version string) (protocol.FileResponse, error) {
 	if !info.Mode().IsRegular() {
 		return protocol.FileResponse{}, errNotRegular
 	}
+	if isSecretFile(info) {
+		return protocol.FileResponse{}, errSecretFile
+	}
 	if versionOf(info) != version {
 		return protocol.FileResponse{}, errChanged
 	}
 
-	// No O_CREATE: the file exists, and a path that vanished is an error.
-	file, err := os.OpenFile(abs, os.O_WRONLY|os.O_TRUNC, 0)
+	// No O_CREATE and no O_TRUNC yet: verify the opened descriptor is not the
+	// credentials file before truncating, so a swap after Stat cannot clobber it.
+	file, err := os.OpenFile(abs, os.O_WRONLY, 0)
 	if err != nil {
+		return protocol.FileResponse{}, err
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return protocol.FileResponse{}, err
+	}
+	if isSecretFile(openedInfo) {
+		file.Close()
+		return protocol.FileResponse{}, errSecretFile
+	}
+	if err := file.Truncate(0); err != nil {
+		file.Close()
 		return protocol.FileResponse{}, err
 	}
 	if _, err := file.WriteString(content); err != nil {

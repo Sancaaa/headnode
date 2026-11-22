@@ -20,6 +20,9 @@ type vncPlan struct {
 	// passwordFile is where the program reads its VNC password from, or "" when it
 	// takes none (D-64). The agent writes a new one each time it starts the program.
 	passwordFile string
+	// socketPath is the private Unix domain socket the VNC server listens on
+	// instead of TCP 127.0.0.1:5900 (used by wayvnc). Empty for TCP VNC servers.
+	socketPath string
 }
 
 // vncEnv is what the machine looks like, as the plan needs to know it. The real
@@ -57,11 +60,14 @@ func findX11Display(dir string) (string, bool) {
 }
 
 // plan picks the VNC server for the desktop that is running, and says how to start
-// it so that it listens on this machine only (127.0.0.1:5900), with no login of its
-// own (D-54): the agent's tunnel is the only way in, and headnode's login and roles
-// are the gate. x11vnc also gets a password the agent makes (D-64), so that other
-// programs and users on this machine cannot use that way in. confDir is where its
-// config and password files would go.
+// it so that other local users on the host cannot hijack the screen:
+//   - wayvnc does not implement classic DES VNCAuth (its enable_auth requires
+//     VeNCrypt/TLS or RSA-AES, which breaks plain RFB in noVNC without cert
+//     management). Instead of listening unauthenticated on TCP 127.0.0.1:5900,
+//     wayvnc binds a private Unix domain socket (0600) inside the agent's 0700
+//     config directory, and the agent's VNC tunnel dials that socket directly.
+//   - x11vnc listens on loopback TCP 127.0.0.1:5900 with a random per-start VNC
+//     password stored in a 0600 file inside confDir (D-64).
 //
 // A Wayland desktop (the Raspberry Pi 5 default) is served by wayvnc and nothing
 // else. An X11 server may be there too, as XWayland does for old programs, but
@@ -72,13 +78,18 @@ func (e vncEnv) plan(confDir string) (vncPlan, bool) {
 			return vncPlan{}, false
 		}
 		conf := filepath.Join(confDir, "wayvnc.conf")
+		sock := filepath.Join(confDir, "wayvnc.sock")
 		return vncPlan{
 			name: "wayvnc",
 			// -C: this config, not the machine's (Raspberry Pi OS turns logins on there).
-			args:       []string{"-C", conf, "127.0.0.1", "5900"},
+			// -u: listen on a Unix domain socket inside our 0700 confDir (chmod 0600)
+			// instead of TCP loopback so other local users cannot connect while noVNC
+			// continues to speak plain RFB over the agent's tunnel.
+			args:       []string{"-C", conf, "-u", sock},
 			env:        []string{"XDG_RUNTIME_DIR=" + dir, "WAYLAND_DISPLAY=" + name},
 			config:     conf,
-			configText: "address=127.0.0.1\nport=5900\nenable_auth=false\n",
+			configText: "enable_auth=false\n",
+			socketPath: sock,
 		}, true
 	}
 	if display, ok := findX11Display(e.x11Dir); ok && e.have("x11vnc") {

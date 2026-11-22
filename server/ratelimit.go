@@ -100,12 +100,31 @@ func (l *loginLimiter) failLocked(ip string) {
 	f.count++
 	f.last = now
 
-	// Without this, someone using many addresses could grow the table forever.
+	// Without a hard cap, a flood from more than maxTracked distinct addresses
+	// within forgetAfter would grow byIP without bound. Prune expired entries
+	// first, then evict the oldest remaining entries until we are back at cap.
 	if len(l.byIP) > maxTracked {
 		for addr, entry := range l.byIP {
 			if now.Sub(entry.last) > forgetAfter {
 				delete(l.byIP, addr)
 			}
+		}
+		for len(l.byIP) > maxTracked {
+			var oldestKey string
+			var oldestTime time.Time
+			for addr, entry := range l.byIP {
+				if addr == ip {
+					continue
+				}
+				if oldestKey == "" || entry.last.Before(oldestTime) {
+					oldestKey = addr
+					oldestTime = entry.last
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(l.byIP, oldestKey)
 		}
 	}
 }

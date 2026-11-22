@@ -253,6 +253,10 @@ func TestSymlinkToADirectoryOpensLikeOne(t *testing.T) {
 // The whole thing over a real WebSocket: framing, ids, and that a binary frame
 // or a bad request does not end the session.
 func TestFilesSessionOverWebSocket(t *testing.T) {
+	old := filesSupported
+	filesSupported = true
+	t.Cleanup(func() { filesSupported = old })
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -304,5 +308,34 @@ func TestFilesSessionOverWebSocket(t *testing.T) {
 	}
 	if r := ask(websocket.MessageText, `{"id":9,"op":"home"}`); !r.OK || r.ID != 9 {
 		t.Errorf("after a binary frame: %+v", r)
+	}
+}
+
+func TestRunFilesRefusedWhenUnsupported(t *testing.T) {
+	old := filesSupported
+	filesSupported = false
+	t.Cleanup(func() { filesSupported = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		runFiles(r.Context(), conn, json.RawMessage(`{"readonly":true}`), nil)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	_, _, err = conn.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusInternalError {
+		t.Fatalf("close status = %v (err %v), want StatusInternalError", websocket.CloseStatus(err), err)
 	}
 }

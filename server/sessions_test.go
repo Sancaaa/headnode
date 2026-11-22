@@ -489,3 +489,209 @@ func TestSessionExpiresWhenTheOtherSideNeverComes(t *testing.T) {
 		t.Error("the expired session is still in the table")
 	}
 }
+
+func TestOpenFilesSessionRejectedOnWindowsHost(t *testing.T) {
+	w := newPermWorld(t)
+	web := w.hosts["web-01"]
+	connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+	// Mark the host as Windows in the database.
+	mustExec(t, w.s.db, `UPDATE agents SET os = 'windows' WHERE id = ?`, web)
+
+	for _, who := range []string{"root", "alice", "bob"} {
+		if code, _ := openSession(t, w.clients[who], w.srv, web, map[string]any{"kind": "files"}); code != http.StatusBadRequest {
+			t.Errorf("%s opening files on Windows host: status = %d, want 400", who, code)
+		}
+	}
+	// Users who cannot view the host still get 404 (host existence is not leaked).
+	if code, _ := openSession(t, w.clients["carol"], w.srv, web, map[string]any{"kind": "files"}); code != http.StatusNotFound {
+		t.Errorf("carol opening files on Windows host: status = %d, want 404", code)
+	}
+}
+
+// startLiveSession opens a session of the given kind and pairs both browser and
+// agent WebSockets, verifying that one frame flows through before returning them.
+func startLiveSession(t *testing.T, srv *httptest.Server, client *http.Client, control *websocket.Conn, hostID, secret string, body any) (browser, agent *websocket.Conn) {
+	t.Helper()
+	code, sid := openSession(t, client, srv, hostID, body)
+	if code != http.StatusCreated {
+		t.Fatalf("open session (%v): status = %d, want 201", body, code)
+	}
+	readOpen(t, control)
+	var err error
+	agent, _, err = dialAgentSession(srv, hostID, secret, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.CloseNow() })
+	browser, _, err = dialBrowserSession(srv, client, sid, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { browser.CloseNow() })
+	writeFrame(t, browser, websocket.MessageBinary, "ping")
+	if _, got := readFrame(t, agent); got != "ping" {
+		t.Fatalf("initial relay frame = %q, want ping", got)
+	}
+	return browser, agent
+}
+
+func assertSessionClosed(t *testing.T, what string, browser, agent *websocket.Conn) {
+	t.Helper()
+	if err := readError(browser); err == nil {
+		t.Errorf("%s: browser side of session is still open", what)
+	}
+	if err := readError(agent); err == nil {
+		t.Errorf("%s: agent side of session is still open", what)
+	}
+}
+
+func assertSessionAlive(t *testing.T, what string, browser, agent *websocket.Conn) {
+	t.Helper()
+	writeFrame(t, browser, websocket.MessageBinary, "still-ok")
+	if _, got := readFrame(t, agent); got != "still-ok" {
+		t.Errorf("%s: expected session to remain open, got %q", what, got)
+	}
+}
+
+func TestActiveSessionsClosedOnHostDelete(t *testing.T) {
+	w := newPermWorld(t)
+	web := w.hosts["web-01"]
+	control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+
+	browser, agent := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+	if code := sendJSON(t, w.clients["root"], w.srv, "DELETE", "/api/hosts/"+web, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("delete host: status = %d, want 204", code)
+	}
+	assertSessionClosed(t, "after host deletion", browser, agent)
+}
+
+func TestActiveSessionsClosedOnPermissionAndGroupChanges(t *testing.T) {
+	t.Run("removing a group member closes their active sessions", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+
+		aliceBrowser, aliceAgent := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		rootBrowser, rootAgent := startLiveSession(t, w.srv, w.clients["root"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		path := "/api/groups/" + itoa(w.groups["Office"]) + "/members/" + itoa(w.user(t, "alice").ID)
+		if code := sendJSON(t, w.clients["root"], w.srv, "DELETE", path, nil, nil); code != http.StatusNoContent {
+			t.Fatalf("remove member: status = %d, want 204", code)
+		}
+		assertSessionClosed(t, "removed member alice", aliceBrowser, aliceAgent)
+		assertSessionAlive(t, "unrelated admin root", rootBrowser, rootAgent)
+	})
+
+	t.Run("demoting operator to viewer closes shell and read-write files sessions", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+
+		shellBrowser, shellAgent := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		rwFilesBrowser, rwFilesAgent := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], map[string]any{"kind": "files"})
+		roFilesBrowser, roFilesAgent := startLiveSession(t, w.srv, w.clients["bob"], control, web, w.secrets["web-01"], map[string]any{"kind": "files"})
+
+		path := "/api/groups/" + itoa(w.groups["Office"]) + "/members/" + itoa(w.user(t, "alice").ID)
+		if code := sendJSON(t, w.clients["root"], w.srv, "PUT", path, map[string]string{"role": "viewer"}, nil); code != http.StatusNoContent {
+			t.Fatalf("demote member: status = %d, want 204", code)
+		}
+		assertSessionClosed(t, "demoted operator shell", shellBrowser, shellAgent)
+		assertSessionClosed(t, "demoted operator rw files", rwFilesBrowser, rwFilesAgent)
+		assertSessionAlive(t, "unrelated viewer ro files", roFilesBrowser, roFilesAgent)
+	})
+
+	t.Run("moving host to another group closes non-admin sessions that lost access", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+
+		aliceBrowser, aliceAgent := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		rootBrowser, rootAgent := startLiveSession(t, w.srv, w.clients["root"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		if code := sendJSON(t, w.clients["root"], w.srv, "PATCH", "/api/hosts/"+web, map[string]any{"group_id": w.groups["Lab"]}, nil); code != http.StatusOK {
+			t.Fatalf("move host: status = %d, want 200", code)
+		}
+		assertSessionClosed(t, "office member alice after host moved to lab", aliceBrowser, aliceAgent)
+		assertSessionAlive(t, "admin root after host moved", rootBrowser, rootAgent)
+	})
+}
+
+func TestActiveSessionsClosedOnLogoutAndSessionRevocation(t *testing.T) {
+	t.Run("logout closes only that login's active WebSocket sessions", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+		second := loginExisting(t, w.srv, "alice")
+
+		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		if code := sendJSON(t, w.clients["alice"], w.srv, "POST", "/api/logout", nil, nil); code != http.StatusNoContent {
+			t.Fatalf("logout: status = %d, want 204", code)
+		}
+		assertSessionClosed(t, "logged-out browser", b1, a1)
+		assertSessionAlive(t, "second browser still logged in", b2, a2)
+	})
+
+	t.Run("revoking one login closes its active WebSocket sessions", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+		second := loginExisting(t, w.srv, "alice")
+
+		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		var list []sessionInfo
+		if code := sendJSON(t, w.clients["alice"], w.srv, "GET", "/api/me/sessions", nil, &list); code != http.StatusOK {
+			t.Fatalf("list sessions: status = %d", code)
+		}
+		var otherID int64
+		for _, info := range list {
+			if !info.Current {
+				otherID = info.ID
+			}
+		}
+		if otherID == 0 {
+			t.Fatal("could not find second session id")
+		}
+		if code := sendJSON(t, w.clients["alice"], w.srv, "DELETE", "/api/me/sessions/"+itoa(otherID), nil, nil); code != http.StatusNoContent {
+			t.Fatalf("revoke session: status = %d, want 204", code)
+		}
+		assertSessionClosed(t, "revoked browser", b2, a2)
+		assertSessionAlive(t, "current browser", b1, a1)
+	})
+
+	t.Run("revoking other sessions closes other logins' WebSockets", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+		second := loginExisting(t, w.srv, "alice")
+
+		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		if code := sendJSON(t, w.clients["alice"], w.srv, "POST", "/api/me/sessions/revoke-others", nil, nil); code != http.StatusOK {
+			t.Fatalf("revoke-others: status = %d, want 200", code)
+		}
+		assertSessionClosed(t, "other browser after revoke-others", b2, a2)
+		assertSessionAlive(t, "current browser after revoke-others", b1, a1)
+	})
+
+	t.Run("changing password closes other logins' WebSockets", func(t *testing.T) {
+		w := newPermWorld(t)
+		web := w.hosts["web-01"]
+		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
+		second := loginExisting(t, w.srv, "alice")
+
+		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
+		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
+
+		body := map[string]string{"current": "correct horse", "new": "a brand new password"}
+		if code := sendJSON(t, w.clients["alice"], w.srv, "POST", "/api/me/password", body, nil); code != http.StatusNoContent {
+			t.Fatalf("change password: status = %d, want 204", code)
+		}
+		assertSessionClosed(t, "other browser after password change", b2, a2)
+		assertSessionAlive(t, "current browser after password change", b1, a1)
+	})
+}

@@ -393,13 +393,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Delete the session on the server, not just the cookie in the browser: a
-	// copied cookie or token must stop working too.
+	// copied cookie or token must stop working too, and any open WebSocket
+	// sessions tied to this login must end at once.
 	if token, _, valid := requestToken(r); valid {
-		if _, err := s.db.Exec(`DELETE FROM web_sessions WHERE token_hash = ?`, hashSecret(token)); err != nil {
+		tokenHash := hashSecret(token)
+		if _, err := s.db.Exec(`DELETE FROM web_sessions WHERE token_hash = ?`, tokenHash); err != nil {
 			slog.Error("delete session", "err", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		s.sessions.endWebSession(tokenHash)
 	}
 	s.audit(currentUser(r).ID, "", "logout", "")
 	if !viaBearer(r) {

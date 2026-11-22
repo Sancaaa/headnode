@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -270,10 +271,50 @@ func TestSessionCookieIsSecureBehindHTTPSProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp := postLogin(t, http.DefaultClient, srv, "sanca", "correct horse", [2]string{"X-Forwarded-Proto", "https"})
+	httpsOrigin := strings.Replace(srv.URL, "http://", "https://", 1)
+	resp := postLogin(t, http.DefaultClient, srv, "sanca", "correct horse",
+		[2]string{"X-Forwarded-Proto", "https"},
+		[2]string{"Origin", httpsOrigin})
 	cookies := resp.Cookies()
 	if len(cookies) != 1 || !cookies[0].Secure {
 		t.Errorf("cookies = %+v, want one cookie with Secure set", cookies)
+	}
+}
+
+func TestSameOriginChecksScheme(t *testing.T) {
+	cases := []struct {
+		name      string
+		origin    string
+		proto     string
+		directTLS bool
+		remote    string
+		want      bool
+	}{
+		{"plain HTTP matches http origin", "http://headnode.example.com", "", false, "203.0.113.9:1234", true},
+		{"plain HTTP rejects https origin", "https://headnode.example.com", "", false, "203.0.113.9:1234", false},
+		{"HTTPS via proxy matches https origin", "https://headnode.example.com", "https", false, "127.0.0.1:1234", true},
+		{"HTTPS via proxy rejects http origin", "http://headnode.example.com", "https", false, "127.0.0.1:1234", false},
+		{"direct TLS matches https origin", "https://headnode.example.com", "", true, "203.0.113.9:1234", true},
+		{"direct TLS rejects http origin", "http://headnode.example.com", "", true, "203.0.113.9:1234", false},
+		{"non-loopback X-Forwarded-Proto is ignored", "http://headnode.example.com", "https", false, "203.0.113.9:1234", true},
+		{"missing origin is rejected", "", "", false, "127.0.0.1:1234", false},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("POST", "/api/logout", nil)
+		r.Host = "headnode.example.com"
+		r.RemoteAddr = c.remote
+		if c.origin != "" {
+			r.Header.Set("Origin", c.origin)
+		}
+		if c.proto != "" {
+			r.Header.Set("X-Forwarded-Proto", c.proto)
+		}
+		if c.directTLS {
+			r.TLS = &tls.ConnectionState{}
+		}
+		if got := sameOrigin(r); got != c.want {
+			t.Errorf("%s: sameOrigin = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

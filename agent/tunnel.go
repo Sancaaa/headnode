@@ -37,8 +37,7 @@ func runTunnel(ctx context.Context, conn *websocket.Conn, rawParams json.RawMess
 		return err
 	}
 
-	dialer := net.Dialer{Timeout: 10 * time.Second}
-	tcp, err := dialer.DialContext(ctx, "tcp", target)
+	tcp, err := dialTunnelTarget(ctx, target, vncSocketPath())
 	if err != nil {
 		// "connection refused" is what a person needs to hear: nothing listens there.
 		conn.Close(websocket.StatusInternalError, closeReason(describe(err)))
@@ -73,4 +72,20 @@ func runTunnel(ctx context.Context, conn *websocket.Conn, rawParams json.RawMess
 	<-done
 	slog.Info("tunnel closed", "target", target)
 	return nil
+}
+
+// dialTunnelTarget connects to target on this host. When the tunnel is for the
+// local VNC server (127.0.0.1:5900) and the agent is serving Wayland via a
+// private wayvnc Unix domain socket (0600 inside its 0700 config dir), it dials
+// that socket first so plain RFB reaches noVNC without exposing TCP 5900 to
+// other local users. Otherwise (x11vnc, TightVNC, or any other loopback port)
+// it dials loopback TCP as usual.
+func dialTunnelTarget(ctx context.Context, target, unixVNC string) (net.Conn, error) {
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	if target == vncAddress && unixVNC != "" {
+		if conn, err := dialer.DialContext(ctx, "unix", unixVNC); err == nil {
+			return conn, nil
+		}
+	}
+	return dialer.DialContext(ctx, "tcp", target)
 }

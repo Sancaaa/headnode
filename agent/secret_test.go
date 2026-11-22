@@ -65,6 +65,61 @@ func TestSecretFileIsNeverHandedOut(t *testing.T) {
 	if !sawNotes {
 		t.Error("the zipped folder lost notes.txt")
 	}
+
+	// Copy, edit, rename, delete and chmod must all refuse the credentials file
+	// so it can neither be exfiltrated via a copy/rename nor tampered with.
+	copyDst := filepath.Join(dir, "copied.json")
+	if err := copyPath(secret, copyDst); !errors.Is(err, errSecretFile) {
+		t.Errorf("copyPath(agent.json): err = %v, want errSecretFile", err)
+	}
+	if _, err := os.Lstat(copyDst); err == nil {
+		t.Error("copyPath(agent.json) created the destination file")
+	}
+
+	dirCopyDst := filepath.Join(t.TempDir(), "dir-copy")
+	if err := copyPath(dir, dirCopyDst); !errors.Is(err, errSecretFile) {
+		t.Errorf("copyPath(dir containing agent.json): err = %v, want errSecretFile", err)
+	}
+	if _, err := os.Lstat(dirCopyDst); err == nil {
+		t.Error("refused directory copy left destination behind")
+	}
+
+	info, err := os.Stat(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeText(secret, `{"agent_secret":"pwned"}`, versionOf(info)); !errors.Is(err, errSecretFile) {
+		t.Errorf("writeText(agent.json): err = %v, want errSecretFile", err)
+	}
+	if err := renamePath(secret, filepath.Join(dir, "moved.json")); !errors.Is(err, errSecretFile) {
+		t.Errorf("renamePath(agent.json): err = %v, want errSecretFile", err)
+	}
+	// Renaming or recursively deleting a folder holding agent.json must also be refused.
+	if err := renamePath(dir, filepath.Join(t.TempDir(), "moved-dir")); !errors.Is(err, errSecretFile) {
+		t.Errorf("renamePath(dir containing agent.json): err = %v, want errSecretFile", err)
+	}
+	if err := deletePath(secret, false); !errors.Is(err, errSecretFile) {
+		t.Errorf("deletePath(agent.json): err = %v, want errSecretFile", err)
+	}
+	if err := deletePath(dir, true); !errors.Is(err, errSecretFile) {
+		t.Errorf("deletePath(dir containing agent.json, recursive): err = %v, want errSecretFile", err)
+	}
+	if err := chmodPath(secret, "0644"); !errors.Is(err, errSecretFile) {
+		t.Errorf("chmodPath(agent.json): err = %v, want errSecretFile", err)
+	}
+	if _, err := os.Lstat(link); err == nil {
+		if _, err := writeText(link, `{"agent_secret":"pwned"}`, versionOf(info)); !errors.Is(err, errSecretFile) {
+			t.Errorf("writeText(link to agent.json): err = %v, want errSecretFile", err)
+		}
+		if err := chmodPath(link, "0644"); !errors.Is(err, errSecretFile) {
+			t.Errorf("chmodPath(link to agent.json): err = %v, want errSecretFile", err)
+		}
+	}
+
+	// Verify agent.json is still intact after every refused operation.
+	if got, err := os.ReadFile(secret); err != nil || string(got) != `{"agent_secret":"s3cret"}` {
+		t.Errorf("agent.json after refused ops = %q (%v), want original contents", got, err)
+	}
 }
 
 func TestNoSecretFileProtectsNothing(t *testing.T) {

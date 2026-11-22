@@ -174,7 +174,7 @@ func (s *Server) handlePullFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, req.Path)
+	stream, status, message := s.openHostFile(r.Context(), u.ID, hostID, req.Path, currentTokenHash(r))
 	if stream == nil {
 		if status != 0 {
 			writeError(w, status, message)

@@ -51,9 +51,10 @@ func TestPlanUsesWaylandWhenItIsThere(t *testing.T) {
 	if !ok || plan.name != "wayvnc" {
 		t.Fatalf("plan = %+v, %v; want wayvnc", plan, ok)
 	}
-	// Loopback only, our own config (the machine's may have logins on), and the
-	// desktop it must attach to.
-	wantArgs := []string{"-C", filepath.Join(conf, "wayvnc.conf"), "127.0.0.1", "5900"}
+	// Private Unix socket inside the agent's 0700 confDir (not TCP 5900), our own
+	// config (the machine's may have logins on), and the desktop it must attach to.
+	wantSock := filepath.Join(conf, "wayvnc.sock")
+	wantArgs := []string{"-C", filepath.Join(conf, "wayvnc.conf"), "-u", wantSock}
 	if !reflect.DeepEqual(plan.args, wantArgs) {
 		t.Errorf("args = %v, want %v", plan.args, wantArgs)
 	}
@@ -61,8 +62,11 @@ func TestPlanUsesWaylandWhenItIsThere(t *testing.T) {
 	if !reflect.DeepEqual(plan.env, wantEnv) {
 		t.Errorf("env = %v, want %v", plan.env, wantEnv)
 	}
-	if plan.configText != "address=127.0.0.1\nport=5900\nenable_auth=false\n" {
+	if plan.configText != "enable_auth=false\n" {
 		t.Errorf("config = %q", plan.configText)
+	}
+	if plan.socketPath != wantSock {
+		t.Errorf("socketPath = %q, want %q", plan.socketPath, wantSock)
 	}
 
 	// Without wayvnc there is nothing to start: never falls back to x11vnc here.
@@ -101,8 +105,8 @@ func TestPlanWithoutADesktopIsNotControllable(t *testing.T) {
 }
 
 func TestCmdlineMatches(t *testing.T) {
-	argv := []string{"wayvnc", "-C", "/home/pi/.config/headnode/wayvnc.conf", "127.0.0.1", "5900"}
-	raw := []byte("wayvnc\x00-C\x00/home/pi/.config/headnode/wayvnc.conf\x00127.0.0.1\x005900\x00")
+	argv := []string{"wayvnc", "-C", "/home/pi/.config/headnode/wayvnc.conf", "-u", "/home/pi/.config/headnode/wayvnc.sock"}
+	raw := []byte("wayvnc\x00-C\x00/home/pi/.config/headnode/wayvnc.conf\x00-u\x00/home/pi/.config/headnode/wayvnc.sock\x00")
 	if !cmdlineMatches(raw, argv) {
 		t.Error("the exact command line should match")
 	}

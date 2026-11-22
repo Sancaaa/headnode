@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,11 +27,12 @@ const Version = "0.1.0"
 // Server holds what the HTTP handlers share. It is a plain struct, not an
 // interface: handlers are methods so they can reach s.db without globals.
 type Server struct {
-	db         *sql.DB
-	agents     *registry      // which agents are online right now
-	sessions   *sessionTable  // shells waiting for their two sides, or running
-	transfers  *transferTable // file sends in progress or recently finished (D-03)
-	loginLimit *loginLimiter  // slows down password guessing
+	db          *sql.DB
+	agents      *registry      // which agents are online right now
+	sessions    *sessionTable  // shells waiting for their two sides, or running
+	transfers   *transferTable // file sends in progress or recently finished (D-03)
+	loginLimit  *loginLimiter  // slows down password guessing
+	enrollLimit *loginLimiter  // slows down enroll-token guessing without sharing loginLimit's table
 	// passwordChecks has room for as many logins as may run bcrypt at once (D-61).
 	passwordChecks chan struct{}
 	filesDir       string    // where uploaded files are stored; "" = uploads are off
@@ -46,11 +48,12 @@ type Server struct {
 
 func New(db *sql.DB) *Server {
 	return &Server{
-		db:         db,
-		agents:     newRegistry(),
-		sessions:   newSessionTable(sessionPairTimeout),
-		transfers:  newTransferTable(),
-		loginLimit: newLoginLimiter(),
+		db:          db,
+		agents:      newRegistry(),
+		sessions:    newSessionTable(sessionPairTimeout),
+		transfers:   newTransferTable(),
+		loginLimit:  newLoginLimiter(),
+		enrollLimit: newLoginLimiter(),
 		// 4: a small VPS has one or two cores, and a person logging in never notices
 		// waiting behind three others for 50 ms each.
 		passwordChecks: make(chan struct{}, 4),
@@ -215,15 +218,25 @@ func readJSONLimit(w http.ResponseWriter, r *http.Request, into any, limit int64
 // Origin at all is refused too: browsers always send one on POST, so a missing
 // one means the caller is not a browser tab, and cookies must not be accepted.
 //
-// We compare the Origin's host with the Host the request was sent to. That
-// also holds behind Caddy, which forwards the original Host header.
+// We compare both the Origin's scheme and host against how this request arrived
+// (HTTPS vs plain HTTP, and Host). Comparing the scheme too stops an active
+// network attacker on plain http://same-host from forging cross-scheme requests
+// to an https:// dashboard. That also holds behind Caddy, which forwards both
+// Host and X-Forwarded-Proto.
 func sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return false
 	}
 	u, err := url.Parse(origin)
-	return err == nil && u.Host != "" && u.Host == r.Host
+	if err != nil || u.Host == "" {
+		return false
+	}
+	wantScheme := "http"
+	if isHTTPS(r) {
+		wantScheme = "https"
+	}
+	return u.Scheme == wantScheme && u.Host == r.Host
 }
 
 func isSafeMethod(method string) bool {
@@ -279,8 +292,18 @@ func serverURL(r *http.Request) string {
 }
 
 // handleEnroll is the one agent endpoint with no auth header: the enroll
-// token in the body is the credential (architecture.md §5).
+// token in the body is the credential (architecture.md §5). Failed attempts
+// are rate-limited per client IP just like login.
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if wait := s.enrollLimit.begin(ip); wait > 0 {
+		seconds := int((wait + time.Second - 1) / time.Second) // round up
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeError(w, http.StatusTooManyRequests,
+			fmt.Sprintf("too many failed attempts, try again in %d seconds", seconds))
+		return
+	}
+
 	var req protocol.EnrollRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -292,7 +315,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := EnrollAgent(s.db, req)
 	if errors.Is(err, ErrInvalidToken) {
-		slog.Warn("enroll rejected", "remote", r.RemoteAddr)
+		slog.Warn("enroll rejected", "remote", r.RemoteAddr, "ip", ip)
 		writeError(w, http.StatusUnauthorized, "invalid or expired enroll token")
 		return
 	}
@@ -303,8 +326,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.enrollLimit.reset(ip)
 	slog.Info("agent enrolled", "agent_id", resp.AgentID, "hostname", req.Hostname)
-	s.audit(0, resp.AgentID, "agent_enroll", "hostname="+req.Hostname+" ip="+clientIP(r))
+	s.audit(0, resp.AgentID, "agent_enroll", "hostname="+req.Hostname+" ip="+ip)
 	// The response holds a secret, so no proxy or browser may cache it.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)

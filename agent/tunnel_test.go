@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,49 @@ func TestTunnelToAPortNobodyListensOn(t *testing.T) {
 	var closed websocket.CloseError
 	if !errors.As(err, &closed) || closed.Code != websocket.StatusInternalError || closed.Reason == "" {
 		t.Errorf("got %v, want a close with code 1011 and the reason the connection failed", err)
+	}
+}
+
+func TestDialTunnelTargetUsesUnixSocketForVNC(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "wayvnc.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix domain sockets unavailable here: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		io.WriteString(c, "RFB 003.008\n")
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := dialTunnelTarget(ctx, vncAddress, sock)
+	if err != nil {
+		t.Fatalf("dialTunnelTarget(vncAddress, sock): %v", err)
+	}
+	defer conn.Close()
+	got, err := io.ReadAll(conn)
+	if err != nil || string(got) != "RFB 003.008\n" {
+		t.Errorf("read %q (%v), want RFB banner from Unix socket", got, err)
+	}
+
+	// Non-VNC targets must NOT be routed to the VNC Unix socket.
+	tcpTarget := listen(t, func(c net.Conn) {
+		defer c.Close()
+		io.WriteString(c, "SSH-2.0\n")
+	})
+	tcpConn, err := dialTunnelTarget(ctx, tcpTarget, sock)
+	if err != nil {
+		t.Fatalf("dialTunnelTarget(tcpTarget, sock): %v", err)
+	}
+	defer tcpConn.Close()
+	got, err = io.ReadAll(tcpConn)
+	if err != nil || string(got) != "SSH-2.0\n" {
+		t.Errorf("non-VNC target read %q (%v), want TCP banner", got, err)
 	}
 }
