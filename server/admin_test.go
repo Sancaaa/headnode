@@ -51,14 +51,14 @@ func sendJSON(t *testing.T, client *http.Client, srv *httptest.Server, method, p
 }
 
 // loginExisting logs in a user that already exists and returns their client.
-func loginExisting(t *testing.T, srv *httptest.Server, username string) *http.Client {
+func loginExisting(t *testing.T, s *Server, srv *httptest.Server, username string) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := &http.Client{Jar: jar}
-	if resp := postLogin(t, client, srv, username, "correct horse"); resp.StatusCode != http.StatusOK {
+	if resp := completeLogin(t, s, client, srv, username, "correct horse"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("login as %s: status = %d, want 200", username, resp.StatusCode)
 	}
 	return client
@@ -353,6 +353,7 @@ func TestAdminRoutesRequireAdmin(t *testing.T) {
 		{"GET", "/api/files", nil},
 		{"DELETE", "/api/files/f_nobody", nil},
 		{"POST", "/api/users/1/password", map[string]any{"password": "a new password"}},
+		{"POST", "/api/users/1/totp-reset", nil},
 		{"PATCH", "/api/users/1", map[string]any{"disabled": true}},
 	}
 
@@ -553,9 +554,9 @@ func TestActionsAreAudited(t *testing.T) {
 	rootID := userIDOf(t, s.db, "root")
 	aliceID := userIDOf(t, s.db, "alice")
 
-	// A failed login, then a real one.
+	// A failed login, then a real one (which also enrolls TOTP on first login).
 	postLogin(t, http.DefaultClient, srv, "root", "wrong password")
-	admin := loginExisting(t, srv, "root")
+	admin := loginExisting(t, s, srv, "root")
 
 	// Admin actions.
 	sendJSON(t, admin, srv, "POST", "/api/users", map[string]any{"username": "bob", "password": "correct horse"}, nil)
@@ -582,7 +583,7 @@ func TestActionsAreAudited(t *testing.T) {
 	for _, r := range rows {
 		actions = append(actions, r.Action)
 	}
-	want := []string{"login_failed", "login", "user_create", "group_create", "member_set", "member_remove", "logout", "agent_enroll"}
+	want := []string{"login_failed", "totp_enabled", "login", "user_create", "group_create", "member_set", "member_remove", "logout", "agent_enroll"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("audit actions = %v\nwant           %v", actions, want)
 	}
@@ -591,19 +592,19 @@ func TestActionsAreAudited(t *testing.T) {
 	if rows[0].UserID.Valid {
 		t.Error("failed login has a user id, but nobody was logged in")
 	}
-	for _, i := range []int{1, 2, 3, 4, 5, 6} {
+	for _, i := range []int{1, 2, 3, 4, 5, 6, 7} {
 		if !rows[i].UserID.Valid || rows[i].UserID.Int64 != rootID {
 			t.Errorf("%s: user_id = %v, want root (%d)", rows[i].Action, rows[i].UserID, rootID)
 		}
 	}
 	// The enroll names the host. The failed login does not name the username.
-	if !rows[7].AgentID.Valid || rows[7].AgentID.String == "" {
+	if !rows[8].AgentID.Valid || rows[8].AgentID.String == "" {
 		t.Error("agent_enroll has no agent id")
 	}
 	if got := rows[0].Detail; got == "" || strings.Contains(got, "root") || strings.Contains(got, "wrong password") {
 		t.Errorf("failed login detail = %q, must name the address and not what was typed", got)
 	}
-	if got := rows[4].Detail; got != "group=Office user=alice role=viewer" {
+	if got := rows[5].Detail; got != "group=Office user=alice role=viewer" {
 		t.Errorf("member_set detail = %q", got)
 	}
 }

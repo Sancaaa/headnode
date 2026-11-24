@@ -27,6 +27,9 @@ func TestNewDatabaseGetsEveryMigration(t *testing.T) {
 	if _, err := db.Exec(`UPDATE agents SET wan_addr = ''`); err != nil {
 		t.Errorf("wan_addr column missing: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE users SET totp_secret = '', totp_enabled = 0, totp_last_step = 0`); err != nil {
+		t.Errorf("TOTP columns missing: %v", err)
+	}
 	if got := db.Stats().MaxOpenConnections; got != 1 {
 		t.Errorf("MaxOpenConnections = %d, want 1", got)
 	}

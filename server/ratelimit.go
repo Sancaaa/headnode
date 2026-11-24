@@ -135,3 +135,19 @@ func (l *loginLimiter) reset(ip string) {
 	defer l.mu.Unlock()
 	delete(l.byIP, ip)
 }
+
+// undo takes back one attempt counted by begin when the step was not a failure
+// (such as the password-only first step of a TOTP login). Unlike reset, it
+// preserves any earlier failed attempts so repeating step 1 cannot clear them.
+func (l *loginLimiter) undo(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f := l.byIP[ip]
+	if f == nil {
+		return
+	}
+	f.count--
+	if f.count <= 0 {
+		delete(l.byIP, ip)
+	}
+}

@@ -18,10 +18,11 @@ import (
 )
 
 const usage = `usage:
-  headnode [-addr host:port] [-db path] [-agents dir]       run the server
-  headnode token create [-db path]                          create an agent enroll token
-  headnode user create -username NAME [-admin] [-db path]   create a dashboard user
-                                                            (asks for the password, or reads it from stdin when piped)`
+  headnode [-addr host:port] [-db path] [-agents dir]         run the server
+  headnode token create [-db path]                            create an agent enroll token
+  headnode user create -username NAME [-admin] [-db path]     create a dashboard user
+                                                              (asks for the password, or reads it from stdin when piped)
+  headnode user totp-reset -username NAME [-db path]          reset a user's authenticator and end their sessions`
 
 func main() {
 	// "token create" and "user create" are CLI commands on the server machine.

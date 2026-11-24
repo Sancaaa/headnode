@@ -16,19 +16,31 @@ import (
 	"headnode/server"
 )
 
-// userCommand handles `headnode user create`. Like `token create`, it talks to
-// the database directly: the very first user has to come from somewhere that
-// needs no login (roadmap M2).
+// userCommand handles `headnode user create` and `headnode user totp-reset`.
+// Like `token create`, it talks to the database directly: the very first user
+// and emergency 2FA recovery have to work without a dashboard login.
 func userCommand(args []string) {
-	if len(args) == 0 || args[0] != "create" {
+	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+	switch args[0] {
+	case "create":
+		userCreateCommand(args[1:])
+	case "totp-reset":
+		userTOTPResetCommand(args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
+}
+
+func userCreateCommand(args []string) {
 	fs := flag.NewFlagSet("user create", flag.ExitOnError)
 	username := fs.String("username", "", "name to log in with")
 	admin := fs.Bool("admin", false, "make this user an administrator")
 	dbPath := fs.String("db", "data/headnode.db", "path of the SQLite database")
-	fs.Parse(args[1:])
+	fs.Parse(args)
 
 	if *username == "" {
 		fmt.Fprintln(os.Stderr, usage)
@@ -49,6 +61,26 @@ func userCommand(args []string) {
 		log.Fatal(err)
 	}
 	fmt.Println("user created")
+}
+
+func userTOTPResetCommand(args []string) {
+	fs := flag.NewFlagSet("user totp-reset", flag.ExitOnError)
+	username := fs.String("username", "", "user whose authenticator should be reset")
+	dbPath := fs.String("db", "data/headnode.db", "path of the SQLite database")
+	fs.Parse(args)
+
+	if *username == "" {
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
+
+	db := openDB(*dbPath)
+	defer db.Close()
+
+	if err := server.ResetUserTOTP(db, *username); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("authenticator reset; user will set up a new one on next login")
 }
 
 // readPassword gets the password without ever showing it.

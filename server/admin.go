@@ -45,12 +45,13 @@ type userRow struct {
 	DisplayName string    `json:"display_name"`
 	IsAdmin     bool      `json:"is_admin"`
 	Disabled    bool      `json:"disabled"` // cannot log in (D-69)
+	TOTPEnabled bool      `json:"totp_enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
 func (s *Server) loadUsers(where string, args ...any) ([]userRow, error) {
 	rows, err := s.db.Query(
-		`SELECT id, username, display_name, is_admin, disabled, created_at FROM users`+where+` ORDER BY username`, args...)
+		`SELECT id, username, display_name, is_admin, disabled, totp_enabled, created_at FROM users`+where+` ORDER BY username`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -59,13 +60,14 @@ func (s *Server) loadUsers(where string, args ...any) ([]userRow, error) {
 	users := []userRow{}
 	for rows.Next() {
 		var u userRow
-		var admin, disabled int
+		var admin, disabled, totpEnabled int
 		var createdAt int64
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &admin, &disabled, &createdAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &admin, &disabled, &totpEnabled, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.IsAdmin = admin == 1
 		u.Disabled = disabled == 1
+		u.TOTPEnabled = totpEnabled == 1
 		u.CreatedAt = time.Unix(createdAt, 0).UTC()
 		users = append(users, u)
 	}

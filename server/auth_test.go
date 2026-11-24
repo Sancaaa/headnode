@@ -2,8 +2,8 @@ package server
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -18,8 +18,20 @@ import (
 // matching Origin header.
 func postLogin(t *testing.T, client *http.Client, srv *httptest.Server, username, password string, headers ...[2]string) *http.Response {
 	t.Helper()
-	body := fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)
-	req, err := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(body))
+	return postLoginCode(t, client, srv, username, password, "", headers...)
+}
+
+func postLoginCode(t *testing.T, client *http.Client, srv *httptest.Server, username, password, code string, headers ...[2]string) *http.Response {
+	t.Helper()
+	payload := map[string]string{"username": username, "password": password}
+	if code != "" {
+		payload["code"] = code
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(string(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +48,64 @@ func postLogin(t *testing.T, client *http.Client, srv *httptest.Server, username
 	return resp
 }
 
+// totpCodeForUser returns a fresh valid 6-digit code for username, moving the
+// server's TOTP clock forward one step if that step was already used in this test.
+func totpCodeForUser(t *testing.T, s *Server, username string) string {
+	t.Helper()
+	var secret string
+	var lastStep int64
+	err := s.db.QueryRow(
+		`SELECT totp_secret, totp_last_step FROM users WHERE username = ?`,
+		normalizeUsername(username),
+	).Scan(&secret, &lastStep)
+	if err != nil {
+		t.Fatalf("read totp for %s: %v", username, err)
+	}
+	now := s.now()
+	if lastStep >= now.Unix()/totpPeriod {
+		next := time.Unix((lastStep+1)*totpPeriod, 0)
+		s.now = func() time.Time { return next }
+		now = next
+	}
+	code, err := TOTPCode(secret, now)
+	if err != nil {
+		t.Fatalf("generate totp for %s: %v", username, err)
+	}
+	return code
+}
+
+// completeLogin runs the full two-step login (password, then TOTP setup or code)
+// and returns the final HTTP response.
+func completeLogin(t *testing.T, s *Server, client *http.Client, srv *httptest.Server, username, password string, headers ...[2]string) *http.Response {
+	t.Helper()
+	resp := postLogin(t, client, srv, username, password, headers...)
+	if resp.StatusCode != http.StatusOK {
+		return resp
+	}
+	var step1 struct {
+		TOTPRequired bool   `json:"totp_required"`
+		TOTPSetup    bool   `json:"totp_setup"`
+		Secret       string `json:"secret"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&step1); err != nil {
+		t.Fatalf("decode login step 1: %v", err)
+	}
+	var code string
+	switch {
+	case step1.TOTPSetup:
+		var err error
+		code, err = TOTPCode(step1.Secret, s.now())
+		if err != nil {
+			t.Fatalf("generate setup totp: %v", err)
+		}
+	case step1.TOTPRequired:
+		code = totpCodeForUser(t, s, username)
+	default:
+		t.Fatalf("login step 1 without OTP succeeded unexpectedly")
+	}
+	return postLoginCode(t, client, srv, username, password, code, headers...)
+}
+
 // loginAs creates a user and returns an HTTP client holding a valid session
 // cookie for them, like a browser after logging in.
 func loginAs(t *testing.T, s *Server, srv *httptest.Server, username string, isAdmin bool) *http.Client {
@@ -48,7 +118,7 @@ func loginAs(t *testing.T, s *Server, srv *httptest.Server, username string, isA
 		t.Fatal(err)
 	}
 	client := &http.Client{Jar: jar}
-	if resp := postLogin(t, client, srv, username, "correct horse"); resp.StatusCode != http.StatusOK {
+	if resp := completeLogin(t, s, client, srv, username, "correct horse"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("login as %s: status = %d, want 200", username, resp.StatusCode)
 	}
 	return client
@@ -118,7 +188,7 @@ func TestLoginAndLogout(t *testing.T) {
 		}
 	}
 
-	resp := postLogin(t, client, srv, "SANCA", "correct horse") // the name is case-insensitive
+	resp := completeLogin(t, s, client, srv, "SANCA", "correct horse") // the name is case-insensitive
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login status = %d, want 200", resp.StatusCode)
 	}
@@ -272,7 +342,7 @@ func TestSessionCookieIsSecureBehindHTTPSProxy(t *testing.T) {
 	}
 
 	httpsOrigin := strings.Replace(srv.URL, "http://", "https://", 1)
-	resp := postLogin(t, http.DefaultClient, srv, "sanca", "correct horse",
+	resp := completeLogin(t, s, http.DefaultClient, srv, "sanca", "correct horse",
 		[2]string{"X-Forwarded-Proto", "https"},
 		[2]string{"Origin", httpsOrigin})
 	cookies := resp.Cookies()

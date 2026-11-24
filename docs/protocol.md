@@ -12,9 +12,10 @@ All API responses are JSON. Errors use the shape `{"error": "message"}` with a m
 
 | Method | Path | Purpose | Milestone |
 |---|---|---|---|
-| `POST` | `/api/login` | `{username, password}` → sets the `hn_session` cookie | M2 |
+| `POST` | `/api/login` | `{username, password, code?, client?}` → mandatory TOTP step 1 (`totp_setup` / `totp_required`) and step 2 (sets `hn_session` cookie or returns CLI token) | M2 |
 | `POST` | `/api/logout` | Ends the login session | M2 |
 | `GET` | `/api/me` | Current user, what they may do, and the server's version and start time | M2 |
+| `POST` | `/api/me/totp/reset` | `{password, code}` → resets the caller's authenticator, ends all their sessions | D-71 |
 | `GET` | `/api/hosts` | Agents the user may see, with online status | M1 |
 | `GET` | `/api/hosts/{id}` | Details of one agent | M1 |
 | `PATCH` | `/api/hosts/{id}` | Change `name` / `group_id` | M2 |
@@ -78,8 +79,9 @@ Every route here answers `403 {"error":"admin only"}` to a logged-in non-admin.
 
 | Request | Reply |
 |---|---|
-| `GET /api/users` | `[{"id":1,"username":"admin","display_name":"","is_admin":true,"disabled":false,"created_at":"…"}]` |
+| `GET /api/users` | `[{"id":1,"username":"admin","display_name":"","is_admin":true,"disabled":false,"totp_enabled":true,"created_at":"…"}]` (`totp_secret` is never returned) |
 | `POST /api/users/{id}/password` `{"password"}` | `204` (M11, D-69). Gives the user a new password and ends **all** of that user's logins (browsers and `hnctl` tokens) and everything they have open (shells, file sessions, tunnels). `400` for a password that is not 8-72 bytes, `404` for an unknown user, `409` for the caller's own account (that needs the current password: `POST /api/me/password`). Audited as `password_reset` (never the password). |
+| `POST /api/users/{id}/totp-reset` | `204` (D-71). Clears the user's authenticator secret (`totp_enabled = 0`, `totp_last_step = 0`) and ends **all** of their logins and open WebSocket sessions so they enroll a new authenticator on their next login. `404` for an unknown user, `409` for the caller's own account (use `POST /api/me/totp/reset` instead). Audited as `user_totp_reset`. |
 | `PATCH /api/users/{id}` `{"disabled"?, "is_admin"?}` | `200` + the user (M11, D-69). At least one field. `disabled: true` ends all of the user's logins and open sessions at once and stops them logging in (the login answer is the usual `401`, with a `login_failed … account disabled` line in the audit log); `false` lets them in again. `is_admin` grants or removes administrator rights. `409` when the caller disables or demotes **themselves**, and when the target is the **last enabled administrator** (checked in the same transaction as the change). `404` for an unknown user. A change that changes nothing is not audited. Audited as `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`. |
 | `POST /api/users` `{"username","password","is_admin"}` | `201` + the user. `400` for a bad username (1-32 of `a-z 0-9 . _ -`, lowercased) or a password that is not 8-72 bytes. `409` if the name is taken (case-insensitive). The reply never contains the password or its hash. |
 | `GET /api/groups` | `[{"id":1,"name":"Office","member_count":2,"host_count":3}]` |
@@ -103,7 +105,7 @@ Roles (architecture.md §6): an `operator` can view, use shells and tunnels, rea
 - The log stores ids, because it must outlive the users and hosts it mentions. `username` and `host_name` are looked up when the log is read, and are `null` when the user or host no longer exists, or never applied (a failed login has no user, an enroll has no user, a login has no host).
 - `detail` is free text for people, and can contain text that came from an agent (a hostname). Clients must show it as text.
 
-Actions written so far: `login`, `login_failed`, `logout`, `password_change`, `password_reset`, `display_name_set`, `session_revoke`, `sessions_revoke_others`, `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`, `docker_start`, `docker_stop`, `docker_restart`, `docker_remove`, `docker_remove_image`, `docker_prune`, `docker_stack`. A failed login records the address only, never the username that was typed.
+Actions written so far: `login`, `login_failed`, `logout`, `totp_enabled`, `totp_reset`, `user_totp_reset`, `password_change`, `password_reset`, `display_name_set`, `session_revoke`, `sessions_revoke_others`, `user_disable`, `user_enable`, `admin_grant`, `admin_revoke`, `user_create`, `group_create`, `member_set`, `member_remove`, `agent_enroll`, `token_create`, `host_rename`, `host_move`, `host_delete`, `session_open`, `session_close`, `vnc_on`, `vnc_off`, `file_download`, `file_upload`, `upload_delete`, `file_mkdir`, `file_rename`, `file_copy`, `file_chmod`, `file_write`, `file_delete`, `transfer_start`, `transfer_result`, `docker_start`, `docker_stop`, `docker_restart`, `docker_remove`, `docker_remove_image`, `docker_prune`, `docker_stack`. A failed login records the address only, never the username, password, TOTP secret, or TOTP code that was typed.
 
 #### Uploading and sending files (M4)
 
@@ -200,9 +202,18 @@ Tokens made with `headnode token create` on the server's command line belong to 
 - A request that carries an `Authorization` header is judged on it alone. An unknown token, an empty one, or any other scheme (`Basic …`, lowercase `bearer …`) is `401`, even if a valid cookie is sent along.
 - The browser WebSocket `/ui/sessions/{id}` accepts a bearer token too, in the `Authorization` header of the handshake. This is what `hnctl forward` uses.
 
-#### Login, logout, me (M2)
+#### Login, logout, me (M2, mandatory TOTP in D-71)
 
-`POST /api/login` with `{"username":"admin","password":"…"}` → `200 {"id":1,"username":"admin","is_admin":true}` and a cookie:
+Every user must authenticate with a password **and** a 6-digit RFC 6238 TOTP code (HMAC-SHA1, 30-second period, ±1 step window). Every `/api/login` reply carries `Cache-Control: no-store`.
+
+1. **Step 1 (password only)**: `POST /api/login` with `{"username":"admin","password":"…"}` (plus `"client":"cli"` for `hnctl`). Password and `disabled` status are checked first so wrong credentials never reveal whether TOTP is set up.
+   - If the user has **not** enrolled an authenticator yet (`totp_enabled = 0`): the server generates and stores a 160-bit Base32 secret (reusing any pending secret until confirmed) and replies `200 {"totp_setup":true,"secret":"…","otpauth_uri":"otpauth://totp/headnode:<user>?secret=…&issuer=headnode"}` with **no cookie and no token**.
+   - If the user **has** enrolled (`totp_enabled = 1`): the server replies `200 {"totp_required":true}` with **no cookie and no token**.
+   - Step 1 does not penalize the login rate limiter, nor does it clear prior failed attempts.
+2. **Step 2 (password + 6-digit code)**: `POST /api/login` with `{"username":"admin","password":"…","code":"123456"}` (plus `"client":"cli"` for `hnctl`). Spaces and dashes in `code` are ignored.
+   - If the code is invalid, or its 30-second time step was already used (`totp_last_step >= step`), the server records a failed login attempt against the rate limiter, audits `login_failed` (never logging the code or secret), and replies `401 {"error":"invalid one-time code"}`.
+   - For first-time setup, a valid code atomically sets `totp_enabled = 1` and `totp_last_step = step`, audits `totp_enabled`, and finishes login.
+   - On success: `200 {"id":1,"username":"admin","is_admin":true,"display_name":"","totp_enabled":true}` (plus `"token":"…"` when `"client":"cli"`) and, for browser logins, a cookie:
 
 ```
 Set-Cookie: hn_session=<64 hex characters>; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax
@@ -212,17 +223,17 @@ Set-Cookie: hn_session=<64 hex characters>; Path=/; Max-Age=604800; HttpOnly; Sa
 
 | Status | When |
 |---|---|
-| 200 | Logged in. |
+| 200 | Step 1 challenge (`totp_setup` or `totp_required`, no session issued) or Step 2 logged in. |
 | 400 | Body is not valid JSON. |
-| 401 | Wrong username or password. One message for both, so it doesn't reveal which usernames exist. |
-| 403 | The `Origin` header is missing or belongs to another site. |
-| 429 | Too many wrong passwords from this address. The `Retry-After` header says how many seconds to wait. |
+| 401 | Wrong username or password (one message for both), or invalid/replayed one-time code. |
+| 403 | The `Origin` header is missing or belongs to another site (browser logins). |
+| 429 | Too many failed password or OTP attempts from this address. The `Retry-After` header says how many seconds to wait. |
 
 `POST /api/logout` → `204`. Deletes the session on the server and clears the cookie.
 
-`GET /api/me` → `{"id":1,"username":"admin","is_admin":true,"can_upload":true,"server_version":"0.1.0","server_started_at":"2026-11-20T08:00:00Z"}`. `can_upload` is true for an admin and for anyone who is an operator in at least one group; the page shows the Transfers link only to them. `server_version` and `server_started_at` feed the line under "headnode" at the top of the sidebar (`0.1.0 · up 3h 12m`): the server sends the moment it started and the browser counts the uptime, so nothing needs to be asked again.
+`GET /api/me` → `{"id":1,"username":"admin","is_admin":true,"display_name":"","totp_enabled":true,"can_upload":true,"server_version":"0.1.0","server_started_at":"2026-11-20T08:00:00Z"}`. `can_upload` is true for an admin and for anyone who is an operator in at least one group; the page shows the Transfers link only to them. `server_version` and `server_started_at` feed the line under "headnode" at the top of the sidebar (`0.1.0 · up 3h 12m`): the server sends the moment it started and the browser counts the uptime, so nothing needs to be asked again.
 
-`me` also has `"display_name":"…"` (empty when none, in which case the page shows the username), and the login reply too.
+`me` also has `"display_name":"…"` (empty when none, in which case the page shows the username) and `"totp_enabled":true`, and the login reply too.
 
 #### The Profile page (M11, D-69)
 
@@ -232,6 +243,7 @@ Every user, for their own account only: none of these takes a user id, they act 
 |---|---|
 | `PATCH /api/me` `{"display_name"}` | `200 {"display_name":"…"}`. The name is trimmed; up to 64 characters, no control characters; `""` clears it. `400` otherwise, or if the field is missing. The username never changes. Audited as `display_name_set`. |
 | `POST /api/me/password` `{"current","new"}` | `204`. Needs the current password. `400` if the new one is not 8-72 bytes or is the same; **`403`** if the current one is wrong (not `401`: the page takes that to mean "logged out"); `429` (with `Retry-After`) after too many wrong guesses, counted per user like a login's, so a stolen session cannot be used to guess the password. Afterwards every **other** login of the user, `hnctl` tokens included, is over; the one that made the request stays. Audited as `password_change` with `other_sessions_ended=N`. |
+| `POST /api/me/totp/reset` `{"password","code"}` | `204` (D-71). Requires the current password **and** a valid, non-replayed 6-digit TOTP code (`403` if either is wrong, `429` after repeated wrong guesses). Clears the authenticator secret, ends **all** of the caller's logins and open WebSocket sessions, clears the browser cookie, and audits `totp_reset`. The user sets up a new authenticator on their next login. |
 | `GET /api/me/sessions` | `[{"id":7,"client":"browser","ip":"203.0.113.5","created_at":"…","last_used_at":"…","expires_at":"…","current":true}]`, the user's own logins that have not expired, newest first. `client` is `browser` or `cli` (hnctl). `id` is only a handle for the next route, not the token. `last_used_at` is written at most once a minute. |
 | `DELETE /api/me/sessions/{id}` | `204`. Signs out one of the user's own other logins. `404` for an unknown id **or somebody else's**; `400` for the session in use (that is logout). Audited as `session_revoke`. |
 | `POST /api/me/sessions/revoke-others` | `200 {"ended":2}`. "Sign out everywhere else": every login of the user but this one. Audited as `sessions_revoke_others`. |

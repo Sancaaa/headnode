@@ -31,8 +31,8 @@ func auditHas(t *testing.T, w *permWorld, action, detailPart string) bool {
 func TestChangePasswordEndsTheOtherSessions(t *testing.T) {
 	w := newPermWorld(t)
 	alice := w.clients["alice"]
-	otherBrowser := loginExisting(t, w.srv, "alice")
-	_, token, _ := cliLogin(t, w.srv, "alice", "correct horse")
+	otherBrowser := loginExisting(t, w.s, w.srv, "alice")
+	_, token, _ := cliLogin(t, w.s, w.srv, "alice", "correct horse")
 
 	change := func(current, next string) int {
 		return sendJSON(t, alice, w.srv, "POST", "/api/me/password", map[string]string{"current": current, "new": next}, nil)
@@ -131,8 +131,8 @@ func TestDisplayName(t *testing.T) {
 func TestMySessions(t *testing.T) {
 	w := newPermWorld(t)
 	alice := w.clients["alice"]
-	second := loginExisting(t, w.srv, "alice")
-	_, token, _ := cliLogin(t, w.srv, "alice", "correct horse")
+	second := loginExisting(t, w.s, w.srv, "alice")
+	_, token, _ := cliLogin(t, w.s, w.srv, "alice", "correct horse")
 
 	var list []sessionInfo
 	if code := sendJSON(t, alice, w.srv, "GET", "/api/me/sessions", nil, &list); code != http.StatusOK || len(list) != 3 {
@@ -212,7 +212,7 @@ func TestAdminResetsAPassword(t *testing.T) {
 	bobID := w.user(t, "bob").ID
 	path := func(id int64) string { return "/api/users/" + itoa(id) + "/password" }
 
-	_, token, _ := cliLogin(t, w.srv, "bob", "correct horse")
+	_, token, _ := cliLogin(t, w.s, w.srv, "bob", "correct horse")
 	if code := sendJSON(t, root, w.srv, "POST", path(bobID), map[string]string{"password": "short"}, nil); code != http.StatusBadRequest {
 		t.Errorf("a short password: status %d, want 400", code)
 	}
@@ -250,7 +250,7 @@ func TestDisableAndEnableAUser(t *testing.T) {
 	w := newPermWorld(t)
 	root := w.clients["root"]
 	carol := w.user(t, "carol")
-	_, token, _ := cliLogin(t, w.srv, "carol", "correct horse")
+	_, token, _ := cliLogin(t, w.s, w.srv, "carol", "correct horse")
 	patch := func(id int64, body map[string]any) int {
 		return sendJSON(t, root, w.srv, "PATCH", "/api/users/"+itoa(id), body, nil)
 	}

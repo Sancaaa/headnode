@@ -35,9 +35,10 @@ type Server struct {
 	enrollLimit *loginLimiter  // slows down enroll-token guessing without sharing loginLimit's table
 	// passwordChecks has room for as many logins as may run bcrypt at once (D-61).
 	passwordChecks chan struct{}
-	filesDir       string    // where uploaded files are stored; "" = uploads are off
-	agentDir       string    // where the built agent programs are; "" = /download is off
-	started        time.Time // when this server started: the page works out the uptime
+	filesDir       string           // where uploaded files are stored; "" = uploads are off
+	agentDir       string           // where the built agent programs are; "" = /download is off
+	started        time.Time        // when this server started: the page works out the uptime
+	now            func() time.Time // clock for TOTP verification; tests can move it instead of sleeping
 
 	// blobMu makes "store a blob and record its row" and "delete a row and maybe
 	// its blob" run one at a time. Without it, a delete could remove a blob in
@@ -58,6 +59,7 @@ func New(db *sql.DB) *Server {
 		// waiting behind three others for 50 ms each.
 		passwordChecks: make(chan struct{}, 4),
 		started:        time.Now(),
+		now:            time.Now,
 	}
 }
 
@@ -88,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	// user id: they all act on currentUser, so one user cannot reach another's.
 	api.HandleFunc("PATCH /api/me", s.handlePatchMe)
 	api.HandleFunc("POST /api/me/password", s.handleChangePassword)
+	api.HandleFunc("POST /api/me/totp/reset", s.handleResetMyTOTP)
 	api.HandleFunc("GET /api/me/sessions", s.handleListMySessions)
 	api.HandleFunc("POST /api/me/sessions/revoke-others", s.handleRevokeOtherSessions)
 	api.HandleFunc("DELETE /api/me/sessions/{id}", s.handleRevokeMySession)
@@ -96,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/users", s.adminOnly(s.handleListUsers))
 	api.HandleFunc("POST /api/users", s.adminOnly(s.handleCreateUser))
 	api.HandleFunc("POST /api/users/{id}/password", s.adminOnly(s.handleResetPassword))
+	api.HandleFunc("POST /api/users/{id}/totp-reset", s.adminOnly(s.handleResetTOTP))
 	api.HandleFunc("PATCH /api/users/{id}", s.adminOnly(s.handlePatchUser))
 	api.HandleFunc("GET /api/groups", s.adminOnly(s.handleListGroups))
 	api.HandleFunc("POST /api/groups", s.adminOnly(s.handleCreateGroup))

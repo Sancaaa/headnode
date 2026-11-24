@@ -47,6 +47,12 @@ var migrations = []string{
 	 CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
 	 CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);
 	 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);`,
+
+	// Mandatory TOTP two-factor authentication (D-71). Every user enrolls on
+	// their next login; totp_last_step blocks reusing a code in the same 30 s step.
+	`ALTER TABLE users ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`,
 }
 
 // migrate brings the database up to date. It runs every time the server (or a

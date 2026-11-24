@@ -178,6 +178,82 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleResetMyTOTP is POST /api/me/totp/reset: a logged-in user resets their own
+// authenticator app. Both the current password and a valid current 6-digit code
+// are required so a stolen session alone cannot replace 2FA. Afterwards every
+// session ends and the next login enrolls a new authenticator (D-71).
+func (s *Server) handleResetMyTOTP(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	var req struct {
+		Password string `json:"password"`
+		Code     string `json:"code"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+
+	totpKey := "totp:" + strconv.FormatInt(u.ID, 10)
+	if wait := s.loginLimit.begin(totpKey); wait > 0 {
+		seconds := int((wait + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("too many wrong codes, try again in %d seconds", seconds))
+		return
+	}
+	if !s.checkOwnPassword(w, r, u, req.Password) {
+		// Password failures are already counted under password:<id>.
+		s.loginLimit.undo(totpKey)
+		return
+	}
+
+	var secret string
+	var enabled int
+	err := s.db.QueryRow(`SELECT totp_secret, totp_enabled FROM users WHERE id = ?`, u.ID).Scan(&secret, &enabled)
+	if err != nil {
+		s.loginLimit.undo(totpKey)
+		internalError(w, "look up totp", err)
+		return
+	}
+	if enabled == 0 {
+		s.loginLimit.undo(totpKey)
+		writeError(w, http.StatusConflict, "two-factor authentication is not enabled")
+		return
+	}
+
+	step, ok := VerifyTOTP(secret, req.Code, s.now())
+	if !ok {
+		// Not 401: the page takes that to mean "logged out". Attempt stays counted on totpKey.
+		writeError(w, http.StatusForbidden, "invalid one-time code")
+		return
+	}
+	res, err := s.db.Exec(
+		`UPDATE users SET totp_secret = '', totp_enabled = 0, totp_last_step = 0
+		 WHERE id = ? AND totp_enabled = 1 AND totp_last_step < ?`,
+		u.ID, step,
+	)
+	if err != nil {
+		s.loginLimit.undo(totpKey)
+		internalError(w, "reset totp", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusForbidden, "invalid one-time code")
+		return
+	}
+	s.loginLimit.reset(totpKey)
+
+	ended, err := s.deleteSessionsOf(u.ID, "")
+	if err != nil {
+		internalError(w, "end sessions", err)
+		return
+	}
+	open := s.sessions.endUser(u.ID)
+	if !viaBearer(r) {
+		setSessionCookie(w, r, "", -1)
+	}
+	s.audit(u.ID, "", "totp_reset", fmt.Sprintf("sessions_ended=%d open_sessions_ended=%d", ended, open))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // sessionInfo is one login, as the Profile page lists it. The id is the row's number,
 // not the token or its hash: it is only a handle for "sign out this one".
 type sessionInfo struct {
@@ -330,6 +406,45 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions.endUser(id) // and what they have open: a shell must not outlive the password it was opened with
 	s.audit(actor.ID, "", "password_reset", fmt.Sprintf("user=%s sessions_ended=%d", username, ended))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResetTOTP is POST /api/users/{id}/totp-reset: an administrator resets a
+// user's authenticator so they can enroll a new one on next login. All of the
+// user's sessions end immediately. Not for the administrator's own account:
+// that requires password + current code on the Profile page (D-71).
+func (s *Server) handleResetTOTP(w http.ResponseWriter, r *http.Request) {
+	actor := currentUser(r)
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if id == actor.ID {
+		writeError(w, http.StatusConflict, "to reset your own authenticator use your Profile page: it asks for your password and current code")
+		return
+	}
+	var username string
+	err := s.db.QueryRow(`SELECT username FROM users WHERE id = ?`, id).Scan(&username)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		internalError(w, "look up user", err)
+		return
+	}
+	if _, err := s.db.Exec(`UPDATE users SET totp_secret = '', totp_enabled = 0, totp_last_step = 0 WHERE id = ?`, id); err != nil {
+		internalError(w, "reset totp", err)
+		return
+	}
+	ended, err := s.deleteSessionsOf(id, "")
+	if err != nil {
+		internalError(w, "end sessions", err)
+		return
+	}
+	open := s.sessions.endUser(id)
+	s.audit(actor.ID, "", "user_totp_reset", fmt.Sprintf("user=%s sessions_ended=%d open_sessions_ended=%d", username, ended, open))
 	w.WriteHeader(http.StatusNoContent)
 }
 

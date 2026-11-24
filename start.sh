@@ -227,13 +227,20 @@ setup_caddy() {
 
     install_caddy
     mkdir -p /etc/caddy
-    if [ -f /etc/caddy/Caddyfile ] && ! grep -q 'reverse_proxy 127.0.0.1:8080' /etc/caddy/Caddyfile; then
+    if [ ! -f /etc/caddy/Caddyfile ] || grep -q '^:80 {' /etc/caddy/Caddyfile; then
+        [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%Y%m%d%H%M%S)"
+        sed "s/headnode\\.example\\.com/$domain/g" deploy/Caddyfile > /etc/caddy/Caddyfile
+    elif grep -q 'reverse_proxy 127.0.0.1:8080' /etc/caddy/Caddyfile; then
+        say "/etc/caddy/Caddyfile already has a block for 127.0.0.1:8080; keeping it as is."
+    else
         cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%Y%m%d%H%M%S)"
-        say "The old /etc/caddy/Caddyfile was kept as a .bak copy."
+        say "Keeping existing sites in /etc/caddy/Caddyfile (backup saved) and adding $domain..."
+        printf '\n' >> /etc/caddy/Caddyfile
+        sed "s/headnode\\.example\\.com/$domain/g" deploy/Caddyfile >> /etc/caddy/Caddyfile
     fi
-    sed "s/headnode\\.example\\.com/$domain/g" deploy/Caddyfile > /etc/caddy/Caddyfile
+    caddy validate --config /etc/caddy/Caddyfile >/dev/null || die "/etc/caddy/Caddyfile is not valid (check it before reloading Caddy)"
     systemctl enable caddy >/dev/null 2>&1
-    systemctl restart caddy || { journalctl -u caddy -n 20 --no-pager; die "Caddy did not start (the log is above)"; }
+    systemctl reload caddy 2>/dev/null || systemctl restart caddy || { journalctl -u caddy -n 20 --no-pager; die "Caddy did not start (the log is above)"; }
     say ""
     say "Caddy is serving https://$domain and getting its certificate."
     say "That needs the domain's DNS record to point at this machine, and ports 80 and 443 open."

@@ -3524,6 +3524,7 @@ function renderUsers(users) {
       h('thead', {}, h('tr', {},
         h('th', {}, 'Username'),
         h('th', {}, 'Role'),
+        h('th', {}, '2FA'),
         h('th', {}, 'Created'),
         h('th', { class: 'col-act' }, 'Action'))),
       h('tbody', {}, users.map((u) => h('tr', { class: u.disabled ? 'static user-disabled' : 'static' },
@@ -3534,6 +3535,7 @@ function renderUsers(users) {
           // A display name is only a label: the username is what the audit log shows.
           u.display_name ? h('div', { class: 'sub' }, u.display_name) : null),
         h('td', {}, u.is_admin ? 'Administrator' : 'User'),
+        h('td', { class: 'sub' }, u.totp_enabled ? 'Enabled' : h('span', { class: 'tag' }, 'Setup pending')),
         h('td', { class: 'sub', title: new Date(u.created_at).toLocaleString() }, relativeTime(u.created_at)),
         // A wrapper inside the cell: "display: flex" on a td itself would stop it being a table cell.
         h('td', { class: 'col-act' }, h('div', { class: 'user-actions' }, ...userActions(u))))))),
@@ -3543,13 +3545,19 @@ function renderUsers(users) {
 }
 
 // The buttons of a user's row. Nobody can disable or demote themselves, or reset their own
-// password here (that asks for the current one, on the Profile page): the server refuses it
-// too (D-69), so these are only left out so as not to offer what would be refused.
+// password or authenticator here (those ask for verification on the Profile page): the server
+// refuses it too (D-69, D-71), so these are only left out so as not to offer what would be refused.
 function userActions(u) {
   if (u.id === me.id) return [h('span', { class: 'sub' }, 'Your Profile page has your own account')];
   const set = (fields) => api('PATCH', '/api/users/' + u.id, fields);
   return [
     button('Reset password', 'btn btn-small', () => resetPasswordDialog(u)),
+    button('Reset OTP', 'btn btn-small', () => confirmDialog({
+      title: 'Reset authenticator for ' + u.username + '?',
+      message: u.username + ' will be signed out everywhere (browsers, hnctl tokens, and open sessions) and must set up a new authenticator app on their next login.',
+      confirmLabel: 'Reset OTP',
+      onConfirm: () => api('POST', '/api/users/' + u.id + '/totp-reset'),
+    })),
     button(u.is_admin ? 'Remove admin' : 'Make admin', 'btn btn-small', () => confirmDialog({
       title: (u.is_admin ? 'Remove administrator rights from ' : 'Make ') + u.username + (u.is_admin ? '?' : ' an administrator?'),
       message: u.is_admin
@@ -3630,9 +3638,45 @@ function renderProfile() {
     profileNameForm(),
     h('h2', {}, 'Password'),
     profilePasswordForm(() => loadSessions(sessionsBox)),
+    h('h2', {}, 'Two-factor authentication'),
+    profileTOTPSection(),
     h('h2', {}, 'Where you are logged in'),
     sessionsBox,
   ];
+}
+
+function profileTOTPSection() {
+  return h('div', { class: 'profile-form' },
+    h('p', {}, 'Two-factor authentication: ', h('strong', {}, me.totp_enabled ? 'Enabled (TOTP)' : 'Setup pending')),
+    h('p', { class: 'sub' }, 'Required for every account. Resetting signs you out everywhere so you can enroll a new authenticator app on your next login.'),
+    button('Reset authenticator…', 'btn danger-text', resetMyTOTPDialog));
+}
+
+function resetMyTOTPDialog() {
+  const password = h('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'current-password', required: '' });
+  const code = h('input', { class: 'input', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456', maxlength: '12', required: '' });
+  openDialog({
+    title: 'Reset your authenticator?',
+    fields: [
+      h('p', {}, 'All of your logins (browsers, hnctl tokens, and open sessions) will end at once. You will be redirected to log in and set up a new authenticator app.'),
+      field('Current password', password),
+      field('Current 6-digit code', code),
+    ],
+    submitLabel: 'Reset authenticator',
+    danger: true,
+    onSubmit: async () => {
+      const result = await api('POST', '/api/me/totp/reset', {
+        password: password.value,
+        code: code.value.trim(),
+      });
+      if (!result.ok) return errorText(result);
+      me = null;
+      routeId++;
+      lastKey = null;
+      refresh();
+      return null;
+    },
+  });
 }
 
 // A message under a form: plain, or red when it is an error.
@@ -3890,6 +3934,9 @@ const AUDIT_LABELS = {
   session_close: 'Session closed',
   password_change: 'Password changed',
   password_reset: 'Password reset',
+  totp_enabled: 'Authenticator set up',
+  totp_reset: 'Authenticator reset',
+  user_totp_reset: 'User authenticator reset',
   display_name_set: 'Display name changed',
   session_revoke: 'Login signed out',
   sessions_revoke_others: 'Signed out everywhere else',
@@ -4271,42 +4318,142 @@ async function sendFileDialog(staged = []) {
 
 let me = null; // the logged-in user from /api/me, or null when logged out
 
+// A copyable value block for setup secrets and URIs (no QR library needed, D-71).
+function copyableValue(label, value) {
+  const box = h('div', { class: 'code-block' }, value);
+  const copy = button('Copy', 'btn btn-small', async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      copy.textContent = 'Copied';
+    } catch (err) {
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      copy.textContent = 'Press Ctrl+C';
+    }
+  });
+  return h('div', { class: 'totp-field' },
+    h('div', { class: 'totp-field-head' }, h('span', {}, label), copy),
+    box);
+}
+
 function renderLogin() {
   document.title = 'Log in · headnode';
 
   const error = h('div', { class: 'form-error', role: 'alert' });
   const username = h('input', { class: 'input', name: 'username', autocomplete: 'username', required: '', autofocus: '' });
   const password = h('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'current-password', required: '' });
+  const code = h('input', { class: 'input', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456', maxlength: '12', required: '' });
   const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Log in');
-
+  const body = h('div', {});
   const form = h('form', { class: 'login' },
     h('div', { class: 'org' }, h('img', { class: 'org-logo', src: '/headnode-mark.svg', alt: '' }), 'headnode'),
-    field('Username', username),
-    field('Password', password),
+    body,
     error,
     submit);
+
+  // Kept only in closure memory between step 1 (password) and step 2 (TOTP code),
+  // and cleared as soon as login finishes or the user goes back.
+  let stage = 'password'; // 'password' | 'required' | 'setup'
+  let creds = { username: '', password: '' };
+
+  function showPasswordStage() {
+    stage = 'password';
+    creds = { username: '', password: '' };
+    code.value = '';
+    error.textContent = '';
+    form.classList.remove('login-wide');
+    submit.textContent = 'Log in';
+    body.replaceChildren(
+      field('Username', username),
+      field('Password', password));
+    password.focus();
+  }
+
+  function showCodeStage(nextStage, setup) {
+    stage = nextStage;
+    code.value = '';
+    error.textContent = '';
+    form.classList.toggle('login-wide', nextStage === 'setup');
+    submit.textContent = nextStage === 'setup' ? 'Verify and log in' : 'Verify';
+    const back = button('Back', 'btn', () => {
+      password.value = '';
+      showPasswordStage();
+      username.focus();
+    });
+    const parts = [];
+    if (nextStage === 'setup') {
+      parts.push(
+        h('p', { class: 'sub' }, 'Two-factor authentication is required for every account. Add this key to your authenticator app (Google Authenticator, 1Password, Authy, etc.), then enter the 6-digit code.'),
+        copyableValue('Secret key (Base32)', setup.secret),
+        copyableValue('Authenticator URI', setup.otpauth_uri));
+    } else {
+      parts.push(h('p', { class: 'sub' }, 'Enter the 6-digit code from your authenticator app for ' + creds.username + '.'));
+    }
+    parts.push(
+      field('One-time code', code),
+      h('div', { class: 'login-back' }, back));
+    body.replaceChildren(...parts);
+    code.focus();
+  }
+
+  showPasswordStage();
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault(); // stay on the page: we send the login with fetch
     submit.disabled = true;
     error.textContent = '';
     try {
+      const payload = stage === 'password'
+        ? { username: username.value, password: password.value }
+        : { username: creds.username, password: creds.password, code: code.value.trim() };
       const resp = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username.value, password: password.value }),
+        body: JSON.stringify(payload),
       });
+      const data = await resp.json().catch(() => ({}));
       if (resp.ok) {
+        if (data.totp_setup) {
+          if (stage === 'password') {
+            creds = { username: username.value, password: password.value };
+            password.value = '';
+            showCodeStage('setup', data);
+          } else {
+            error.textContent = 'Enter the 6-digit code from your authenticator app.';
+            code.focus();
+          }
+          submit.disabled = false;
+          return;
+        }
+        if (data.totp_required) {
+          if (stage === 'password') {
+            creds = { username: username.value, password: password.value };
+            password.value = '';
+            showCodeStage('required', null);
+          } else {
+            error.textContent = 'Enter the 6-digit code from your authenticator app.';
+            code.focus();
+          }
+          submit.disabled = false;
+          return;
+        }
         password.value = '';
+        creds = { username: '', password: '' };
+        code.value = '';
         me = null;
         routeId++;
         lastKey = null;
         refresh(); // loads the page the URL points at, and /api/me
         return;
       }
-      // The server explains itself: wrong password, or "try again in N seconds".
-      const body = await resp.json().catch(() => ({}));
-      error.textContent = body.error || 'Login failed (HTTP ' + resp.status + ').';
+      // The server explains itself: wrong password, invalid code, or "try again in N seconds".
+      error.textContent = data.error || 'Login failed (HTTP ' + resp.status + ').';
+      if (stage !== 'password') {
+        code.select();
+        code.focus();
+      }
     } catch (err) {
       error.textContent = 'Cannot reach the server.';
     }

@@ -19,20 +19,55 @@ import (
 // ------------------------------------------------------------- helpers
 
 // cliLogin logs in the way hnctl does: no Origin, and "client":"cli" in the
-// body. It returns the status and the token (empty if the login failed).
-func cliLogin(t *testing.T, srv *httptest.Server, username, password string) (int, string, *http.Response) {
+// body, completing mandatory TOTP step 2 when challenged. It returns the status
+// and the token (empty if the login failed).
+func cliLogin(t *testing.T, s *Server, srv *httptest.Server, username, password string) (int, string, *http.Response) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"username": username, "password": password, "client": "cli"})
-	resp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
+	send := func(code string) (int, *http.Response, struct {
+		Token        string `json:"token"`
+		TOTPRequired bool   `json:"totp_required"`
+		TOTPSetup    bool   `json:"totp_setup"`
+		Secret       string `json:"secret"`
+	}) {
+		payload := map[string]string{"username": username, "password": password, "client": "cli"}
+		if code != "" {
+			payload["code"] = code
+		}
+		body, _ := json.Marshal(payload)
+		resp, err := http.Post(srv.URL+"/api/login", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var reply struct {
+			Token        string `json:"token"`
+			TOTPRequired bool   `json:"totp_required"`
+			TOTPSetup    bool   `json:"totp_setup"`
+			Secret       string `json:"secret"`
+		}
+		json.NewDecoder(resp.Body).Decode(&reply)
+		return resp.StatusCode, resp, reply
 	}
-	defer resp.Body.Close()
-	var reply struct {
-		Token string `json:"token"`
+
+	status, resp, reply := send("")
+	if status != http.StatusOK {
+		return status, reply.Token, resp
 	}
-	json.NewDecoder(resp.Body).Decode(&reply)
-	return resp.StatusCode, reply.Token, resp
+	var code string
+	switch {
+	case reply.TOTPSetup:
+		var err error
+		code, err = TOTPCode(reply.Secret, s.now())
+		if err != nil {
+			t.Fatalf("generate setup totp: %v", err)
+		}
+	case reply.TOTPRequired:
+		code = totpCodeForUser(t, s, username)
+	default:
+		return status, reply.Token, resp
+	}
+	status, resp, reply = send(code)
+	return status, reply.Token, resp
 }
 
 // withToken sends a request with a bearer token and no Origin and no cookie,
@@ -71,7 +106,7 @@ func TestCLILoginGivesATokenAndNoCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, token, resp := cliLogin(t, srv, "sanca", "correct horse")
+	code, token, resp := cliLogin(t, s, srv, "sanca", "correct horse")
 	if code != http.StatusOK || len(token) != 64 {
 		t.Fatalf("status = %d, token length = %d, want 200 and 64 hex characters", code, len(token))
 	}
@@ -117,13 +152,13 @@ func TestCLILoginIsStillRateLimitedAndRejectsBadPasswords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 4; i++ {
-		if code, token, _ := cliLogin(t, srv, "sanca", "wrong password"); code != http.StatusUnauthorized || token != "" {
+		if code, token, _ := cliLogin(t, s, srv, "sanca", "wrong password"); code != http.StatusUnauthorized || token != "" {
 			t.Fatalf("attempt %d: status = %d, token %q, want 401 and no token", i, code, token)
 		}
 	}
 	// The fifth comes at once and is refused even with the right password: the
 	// command line gets no way around the limit.
-	if code, _, _ := cliLogin(t, srv, "sanca", "correct horse"); code != http.StatusTooManyRequests {
+	if code, _, _ := cliLogin(t, s, srv, "sanca", "correct horse"); code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429", code)
 	}
 }
@@ -183,7 +218,7 @@ func TestLogoutEndsABearerSession(t *testing.T) {
 	if err := CreateUser(s.db, "sanca", "correct horse", false); err != nil {
 		t.Fatal(err)
 	}
-	_, token, _ := cliLogin(t, srv, "sanca", "correct horse")
+	_, token, _ := cliLogin(t, s, srv, "sanca", "correct horse")
 
 	if code := withToken(t, "POST", srv.URL+"/api/logout", token, nil, nil); code != http.StatusNoContent {
 		t.Fatalf("logout: status = %d, want 204", code)
@@ -260,8 +295,8 @@ func TestBrowserMayOnlyTunnelToVNC(t *testing.T) {
 	if err := CreateUser(s.db, "sanca", "correct horse", true); err != nil {
 		t.Fatal(err)
 	}
-	browser := loginExisting(t, srv, "sanca")
-	_, token, _ := cliLogin(t, srv, "sanca", "correct horse")
+	browser := loginExisting(t, s, srv, "sanca")
+	_, token, _ := cliLogin(t, s, srv, "sanca", "correct horse")
 	control := connectAgent(t, s, srv, id, secret)
 	request := func(target string) map[string]any {
 		return map[string]any{"kind": "tunnel", "params": map[string]any{"target": target}}
@@ -301,8 +336,8 @@ func TestTunnelSessionWithABearerToken(t *testing.T) {
 	if err := CreateUser(s.db, "mallory", "correct horse", true); err != nil {
 		t.Fatal(err)
 	}
-	_, token, _ := cliLogin(t, srv, "sanca", "correct horse")
-	_, otherToken, _ := cliLogin(t, srv, "mallory", "correct horse")
+	_, token, _ := cliLogin(t, s, srv, "sanca", "correct horse")
+	_, otherToken, _ := cliLogin(t, s, srv, "mallory", "correct horse")
 	control := connectAgent(t, s, srv, id, secret)
 
 	var reply struct {

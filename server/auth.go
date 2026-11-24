@@ -32,6 +32,7 @@ var (
 	ErrUsernameTaken   = errors.New("username already exists")
 	ErrInvalidUsername = errors.New("username must be 1-32 characters: lowercase letters, digits, dot, dash or underscore")
 	ErrInvalidPassword = fmt.Errorf("password must be %d to %d bytes long", minPasswordLen, maxPasswordLen)
+	ErrUserNotFound    = errors.New("user not found")
 
 	usernameRe = regexp.MustCompile(`^[a-z0-9._-]{1,32}$`)
 )
@@ -49,9 +50,10 @@ type user struct {
 	// What the sidebar shows instead of the username when it is set (D-69). The
 	// username itself never changes: the audit log shows it.
 	DisplayName string `json:"display_name"`
-	// Only checkPassword sets it: the password was right, but the account is disabled.
-	// Unexported, so it is never in a reply.
-	disabled bool
+	TOTPEnabled bool   `json:"totp_enabled"`
+	// Unexported so secrets and internal flags are never serialized into API replies.
+	disabled   bool
+	totpSecret string
 }
 
 // userKey is the context key for the logged-in user. It is its own unexported
@@ -101,6 +103,42 @@ func CreateUser(db *sql.DB, username, password string, isAdmin bool) error {
 	return nil
 }
 
+// ResetUserTOTP clears a user's authenticator secret and deletes all of their
+// stored sessions. Intended for emergency recovery via `headnode user totp-reset`
+// when an administrator loses access to their authenticator app (D-71).
+func ResetUserTOTP(db *sql.DB, username string) error {
+	username = normalizeUsername(username)
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin totp reset: %w", err)
+	}
+	defer tx.Rollback()
+
+	var id int64
+	err = tx.QueryRow(`SELECT id FROM users WHERE username = ?`, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("look up user: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE users SET totp_secret = '', totp_enabled = 0, totp_last_step = 0 WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("clear totp: %w", err)
+	}
+	res, err := tx.Exec(`DELETE FROM web_sessions WHERE user_id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete sessions: %w", err)
+	}
+	ended, _ := res.RowsAffected()
+	if _, err := tx.Exec(
+		`INSERT INTO audit_log (at, user_id, agent_id, action, detail) VALUES (?, NULL, NULL, 'user_totp_reset', ?)`,
+		time.Now().Unix(), fmt.Sprintf("user=%s via=cli sessions_ended=%d", username, ended),
+	); err != nil {
+		return fmt.Errorf("write audit log: %w", err)
+	}
+	return tx.Commit()
+}
+
 // dummyHash is a valid bcrypt hash of a password nobody has. It is made on
 // first use, not at startup, so tests and CLI commands do not pay for it.
 var dummyHash = sync.OnceValue(func() []byte {
@@ -115,10 +153,11 @@ func (s *Server) checkPassword(username, password string) (user, bool, error) {
 
 	var u user
 	var hash string
-	var admin, disabled int
+	var admin, disabled, totpEnabled int
 	err := s.db.QueryRow(
-		`SELECT id, username, password_hash, is_admin, display_name, disabled FROM users WHERE username = ?`, username,
-	).Scan(&u.ID, &u.Username, &hash, &admin, &u.DisplayName, &disabled)
+		`SELECT id, username, password_hash, is_admin, display_name, disabled, totp_secret, totp_enabled
+		 FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &hash, &admin, &u.DisplayName, &disabled, &u.totpSecret, &totpEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Compare against a dummy hash anyway. Otherwise "no such user" would
 		// answer in 1 ms and "wrong password" in 50 ms, and the difference
@@ -134,6 +173,7 @@ func (s *Server) checkPassword(username, password string) (user, bool, error) {
 		return user{}, false, nil
 	}
 	u.IsAdmin = admin == 1
+	u.TOTPEnabled = totpEnabled == 1
 	// A disabled user cannot log in (D-69). The password is checked first, so the
 	// answer takes as long as any other, and the caller can tell the audit log that it
 	// was a disabled account, while the person at the keyboard gets the same message.
@@ -209,17 +249,17 @@ func (s *Server) sessionUser(r *http.Request) (u user, bearer, ok bool, err erro
 		return user{}, bearer, false, nil
 	}
 
-	var admin int
+	var admin, totpEnabled int
 	var lastUsed int64
 	now := time.Now()
 	// u.disabled = 0: a disabled user's sessions are deleted when they are disabled, and
 	// this makes sure none that slipped through still works (D-69).
 	err = s.db.QueryRow(
-		`SELECT u.id, u.username, u.is_admin, u.display_name, s.last_used_at
+		`SELECT u.id, u.username, u.is_admin, u.display_name, u.totp_enabled, s.last_used_at
 		 FROM web_sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0`,
 		hashSecret(token), now.Unix(),
-	).Scan(&u.ID, &u.Username, &admin, &u.DisplayName, &lastUsed)
+	).Scan(&u.ID, &u.Username, &admin, &u.DisplayName, &totpEnabled, &lastUsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return user{}, bearer, false, nil
 	}
@@ -227,6 +267,7 @@ func (s *Server) sessionUser(r *http.Request) (u user, bearer, ok bool, err erro
 		return user{}, bearer, false, fmt.Errorf("look up session: %w", err)
 	}
 	u.IsAdmin = admin == 1
+	u.TOTPEnabled = totpEnabled == 1
 	// "Last used" for the Profile page. Written at most once a minute: the dashboard asks
 	// every two seconds, and a database write for each would be a lot for a timestamp.
 	if now.Unix()-lastUsed >= 60 {
@@ -290,11 +331,16 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxA
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// Login responses can hold a TOTP setup secret or a CLI bearer token; never cache them.
+	w.Header().Set("Cache-Control", "no-store")
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		// "cli" asks for a bearer token in the reply instead of a cookie.
 		Client string `json:"client"`
+		// 6-digit RFC 6238 one-time code for step 2 (or first-time setup confirmation).
+		Code string `json:"code"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -331,14 +377,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.passwordChecks <- struct{}{}:
 	case <-r.Context().Done():
+		s.loginLimit.undo(ip)
 		return
 	case <-time.After(10 * time.Second):
+		s.loginLimit.undo(ip)
 		writeError(w, http.StatusServiceUnavailable, "the server is busy, try again in a moment")
 		return
 	}
 	u, ok, err := s.checkPassword(req.Username, req.Password)
 	<-s.passwordChecks
 	if err != nil {
+		s.loginLimit.undo(ip)
 		slog.Error("login", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -357,9 +406,116 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.audit(0, "", "login_failed", "ip="+ip)
 		}
 		// One message for "no such user" and "wrong password", so the answer
-		// does not reveal which usernames exist.
+		// does not reveal which usernames exist or whether TOTP is enrolled.
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
+	}
+
+	// Mandatory TOTP second factor (D-71). Checked only after the password is verified
+	// so wrong credentials never reveal whether an account exists or has TOTP set up.
+	code := strings.TrimSpace(req.Code)
+	if !u.TOTPEnabled {
+		if u.totpSecret == "" {
+			secret, err := GenerateTOTPSecret()
+			if err != nil {
+				s.loginLimit.undo(ip)
+				slog.Error("generate totp secret", "err", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			res, err := s.db.Exec(
+				`UPDATE users SET totp_secret = ? WHERE id = ? AND totp_enabled = 0 AND totp_secret = ''`,
+				secret, u.ID,
+			)
+			if err != nil {
+				s.loginLimit.undo(ip)
+				slog.Error("store totp secret", "err", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			if n, _ := res.RowsAffected(); n == 1 {
+				u.totpSecret = secret
+			} else {
+				var enabled int
+				if err := s.db.QueryRow(`SELECT totp_secret, totp_enabled FROM users WHERE id = ?`, u.ID).Scan(&u.totpSecret, &enabled); err != nil {
+					s.loginLimit.undo(ip)
+					slog.Error("reload totp secret", "err", err)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				u.TOTPEnabled = enabled == 1
+			}
+		}
+	}
+
+	if u.TOTPEnabled {
+		if code == "" {
+			// Password-only first step: take back begin's penalty without clearing
+			// any prior OTP failures.
+			s.loginLimit.undo(ip)
+			writeJSON(w, http.StatusOK, map[string]bool{"totp_required": true})
+			return
+		}
+		step, valid := VerifyTOTP(u.totpSecret, code, s.now())
+		if !valid {
+			slog.Warn("login failed", "ip", ip, "reason", "totp")
+			s.audit(u.ID, "", "login_failed", "ip="+ip+" invalid totp")
+			writeError(w, http.StatusUnauthorized, "invalid one-time code")
+			return
+		}
+		// Reject replaying a code from the same or an earlier 30-second step.
+		res, err := s.db.Exec(
+			`UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_enabled = 1 AND totp_last_step < ?`,
+			step, u.ID, step,
+		)
+		if err != nil {
+			s.loginLimit.undo(ip)
+			slog.Error("record totp step", "err", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			slog.Warn("login failed", "ip", ip, "reason", "totp_replay")
+			s.audit(u.ID, "", "login_failed", "ip="+ip+" totp replay")
+			writeError(w, http.StatusUnauthorized, "invalid one-time code")
+			return
+		}
+	} else {
+		if code == "" {
+			s.loginLimit.undo(ip)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"totp_setup":  true,
+				"secret":      u.totpSecret,
+				"otpauth_uri": TOTPURI(totpIssuer, u.Username, u.totpSecret),
+			})
+			return
+		}
+		step, valid := VerifyTOTP(u.totpSecret, code, s.now())
+		if !valid {
+			slog.Warn("login failed", "ip", ip, "reason", "totp_setup")
+			s.audit(u.ID, "", "login_failed", "ip="+ip+" invalid totp")
+			writeError(w, http.StatusUnauthorized, "invalid one-time code")
+			return
+		}
+		res, err := s.db.Exec(
+			`UPDATE users SET totp_enabled = 1, totp_last_step = ?
+			 WHERE id = ? AND totp_enabled = 0 AND totp_secret = ?`,
+			step, u.ID, u.totpSecret,
+		)
+		if err != nil {
+			s.loginLimit.undo(ip)
+			slog.Error("enable totp", "err", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			slog.Warn("login failed", "ip", ip, "reason", "totp_setup_race")
+			s.audit(u.ID, "", "login_failed", "ip="+ip+" invalid totp")
+			writeError(w, http.StatusUnauthorized, "invalid one-time code")
+			return
+		}
+		u.TOTPEnabled = true
+		s.audit(u.ID, "", "totp_enabled", "ip="+ip)
 	}
 
 	client := "browser"
@@ -379,7 +535,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// hnctl keeps the token in its own file and sends it as a bearer token.
 		// No cookie is set, and the token is in this one reply only.
 		s.audit(u.ID, "", "login", "ip="+ip+" client=cli")
-		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, struct {
 			user
 			Token string `json:"token"`

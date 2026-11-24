@@ -97,7 +97,18 @@ func loginCommand(args []string) {
 		fatalf("%v", err)
 	}
 
-	cfg, err := login(server, strings.TrimSpace(*username), password)
+	cfg, err := login(server, strings.TrimSpace(*username), password, func(secret, uri string) (string, error) {
+		if secret != "" {
+			fmt.Fprintln(os.Stderr, "Two-factor authentication setup required.")
+			fmt.Fprintln(os.Stderr, "Add this account to your authenticator app:")
+			fmt.Fprintf(os.Stderr, "  Secret: %s\n", secret)
+			if uri != "" {
+				fmt.Fprintf(os.Stderr, "  URI:    %s\n", uri)
+			}
+		}
+		fmt.Fprint(os.Stderr, "OTP code: ")
+		return readLine(in)
+	})
 	if err != nil {
 		fatalf("login failed: %v", err)
 	}

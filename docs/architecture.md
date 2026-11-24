@@ -115,7 +115,8 @@ The server stores only a **hash** of the secret (`D-09`). If a host is stolen or
 Only the tables the MVP needs. The exact schema will live in `server/schema.sql`.
 
 ```
-users          id, username, password_hash, is_admin, created_at
+users          id, username, password_hash, is_admin, display_name, disabled,
+               totp_secret, totp_enabled, totp_last_step, created_at
 groups         id, name
 group_members  user_id, group_id, role            -- role: 'operator' | 'viewer'
 agents         id, group_id, name, secret_hash, hostname, os, arch, version,
@@ -144,7 +145,7 @@ This system is effectively a "master key" to every host, so the items below are 
 
 | Threat | Countermeasure |
 |---|---|
-| Someone else opens the dashboard | Login required; passwords hashed with bcrypt; cookie `HttpOnly; Secure; SameSite=Lax` |
+| Someone else opens the dashboard | Login required; passwords hashed with bcrypt + mandatory RFC 6238 TOTP (D-71) with replay guard; cookie `HttpOnly; Secure; SameSite=Lax` |
 | Another site triggers actions as the user (CSRF / CSWSH) | Check the `Origin` header on every POST and every browser WebSocket |
 | A fake agent pretends to be another host | A secret per agent, stored only as a hash |
 | Eavesdropping | Everything over TLS (Caddy); the agent rejects servers without a valid certificate (except with an `--insecure` flag for dev) |
@@ -165,7 +166,8 @@ scripts/build-agents.*      cross-compile the agent into dist/, which the server
 cmd/hnctl/                  main.go (commands), config.go (saved login), client.go (API calls), forward.go (tunnels)
 server/                     one package, split by FILE:
   http.go                   routing + login/origin middleware
-  auth.go                   login, cookies, can()
+  auth.go                   login, cookies, mandatory TOTP flow
+  totp.go                   RFC 6238 TOTP helper (stdlib-only, D-71)
   ratelimit.go              login attempt limiter
   permissions.go            roles, can()
   admin.go                  admin API: users, groups, members
@@ -191,4 +193,4 @@ web/                        index.html, *.js, style.css (embedded into the serve
 
 ## 9. Deliberately NOT included yet
 
-RDP in the browser, a shell and file manager on Windows, CCTV, agent auto-update, 2FA, SSO, multiple servers, plugins, notifications. (Remote desktop **is** included, as VNC: the host runs an ordinary VNC server on its own loopback, the agent's existing tunnel carries it, and noVNC in the dashboard draws it, so no screen code of our own, D-44 and D-49 to D-54, D-65.) Any of these may be added later, but the architecture above is **not** prepared for them in advance (`D-10`). When the time comes, we change the architecture.
+RDP in the browser, a shell and file manager on Windows, CCTV, agent auto-update, SSO, multiple servers, plugins, notifications. (Remote desktop **is** included, as VNC: the host runs an ordinary VNC server on its own loopback, the agent's existing tunnel carries it, and noVNC in the dashboard draws it, so no screen code of our own, D-44 and D-49 to D-54, D-65.) Any of these may be added later, but the architecture above is **not** prepared for them in advance (`D-10`). When the time comes, we change the architecture.

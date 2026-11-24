@@ -621,7 +621,7 @@ func TestActiveSessionsClosedOnLogoutAndSessionRevocation(t *testing.T) {
 		w := newPermWorld(t)
 		web := w.hosts["web-01"]
 		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
-		second := loginExisting(t, w.srv, "alice")
+		second := loginExisting(t, w.s, w.srv, "alice")
 
 		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
 		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
@@ -637,7 +637,7 @@ func TestActiveSessionsClosedOnLogoutAndSessionRevocation(t *testing.T) {
 		w := newPermWorld(t)
 		web := w.hosts["web-01"]
 		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
-		second := loginExisting(t, w.srv, "alice")
+		second := loginExisting(t, w.s, w.srv, "alice")
 
 		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
 		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
@@ -666,7 +666,7 @@ func TestActiveSessionsClosedOnLogoutAndSessionRevocation(t *testing.T) {
 		w := newPermWorld(t)
 		web := w.hosts["web-01"]
 		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
-		second := loginExisting(t, w.srv, "alice")
+		second := loginExisting(t, w.s, w.srv, "alice")
 
 		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
 		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))
@@ -682,7 +682,7 @@ func TestActiveSessionsClosedOnLogoutAndSessionRevocation(t *testing.T) {
 		w := newPermWorld(t)
 		web := w.hosts["web-01"]
 		control := connectAgent(t, w.s, w.srv, web, w.secrets["web-01"])
-		second := loginExisting(t, w.srv, "alice")
+		second := loginExisting(t, w.s, w.srv, "alice")
 
 		b1, a1 := startLiveSession(t, w.srv, w.clients["alice"], control, web, w.secrets["web-01"], shellRequest(80, 24))
 		b2, a2 := startLiveSession(t, w.srv, second, control, web, w.secrets["web-01"], shellRequest(80, 24))

@@ -116,7 +116,7 @@ func TestConfigRoundTrip(t *testing.T) {
 
 func TestLoginAsksForACLIToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct{ Username, Password, Client string }
+		var req struct{ Username, Password, Client, Code string }
 		json.NewDecoder(r.Body).Decode(&req)
 		if r.URL.Path != "/api/login" || req.Client != "cli" {
 			http.Error(w, `{"error":"unexpected request"}`, http.StatusBadRequest)
@@ -126,16 +126,70 @@ func TestLoginAsksForACLIToken(t *testing.T) {
 			http.Error(w, `{"error":"invalid username or password"}`, http.StatusUnauthorized)
 			return
 		}
+		if req.Code == "" {
+			io.WriteString(w, `{"totp_required":true}`)
+			return
+		}
+		if req.Code != "123456" {
+			http.Error(w, `{"error":"invalid one-time code"}`, http.StatusUnauthorized)
+			return
+		}
 		io.WriteString(w, `{"id":1,"username":"sanca","is_admin":true,"token":"abc123"}`)
 	}))
 	defer srv.Close()
 
-	cfg, err := login(srv.URL, "sanca", "correct horse")
-	if err != nil || cfg.Token != "abc123" || cfg.Username != "sanca" || cfg.Server != srv.URL {
-		t.Errorf("login = %+v, %v, want the token and username", cfg, err)
+	var prompted bool
+	cfg, err := login(srv.URL, "sanca", "correct horse", func(secret, uri string) (string, error) {
+		prompted = true
+		if secret != "" || uri != "" {
+			t.Errorf("totp_required passed setup values secret=%q uri=%q", secret, uri)
+		}
+		return " 123456 ", nil
+	})
+	if err != nil || !prompted || cfg.Token != "abc123" || cfg.Username != "sanca" || cfg.Server != srv.URL {
+		t.Errorf("login = %+v, %v (prompted=%v), want the token and username", cfg, err, prompted)
 	}
-	if _, err := login(srv.URL, "sanca", "wrong"); err == nil || !strings.Contains(err.Error(), "invalid username or password") {
+	if _, err := login(srv.URL, "sanca", "wrong", nil); err == nil || !strings.Contains(err.Error(), "invalid username or password") {
 		t.Errorf("wrong password: err = %v, want the server's message", err)
+	}
+	if _, err := login(srv.URL, "sanca", "correct horse", func(string, string) (string, error) { return "000000", nil }); err == nil || !strings.Contains(err.Error(), "invalid one-time code") {
+		t.Errorf("wrong OTP: err = %v, want invalid one-time code", err)
+	}
+}
+
+func TestLoginHandlesFirstTimeTOTPSetup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Username, Password, Client, Code string }
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.Client != "cli" || req.Username != "alice" || req.Password != "secret pw" {
+			http.Error(w, `{"error":"bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		if req.Code == "" {
+			io.WriteString(w, `{"totp_setup":true,"secret":"JBSWY3DPEHPK3PXP","otpauth_uri":"otpauth://totp/headnode:alice?secret=JBSWY3DPEHPK3PXP&issuer=headnode"}`)
+			return
+		}
+		if req.Code != "654321" {
+			http.Error(w, `{"error":"invalid one-time code"}`, http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, `{"id":2,"username":"alice","is_admin":false,"token":"tok_setup"}`)
+	}))
+	defer srv.Close()
+
+	var gotSecret, gotURI string
+	cfg, err := login(srv.URL, "alice", "secret pw", func(secret, uri string) (string, error) {
+		gotSecret, gotURI = secret, uri
+		return "654321", nil
+	})
+	if err != nil {
+		t.Fatalf("setup login failed: %v", err)
+	}
+	if gotSecret != "JBSWY3DPEHPK3PXP" || !strings.HasPrefix(gotURI, "otpauth://totp/headnode:alice") {
+		t.Errorf("prompt got secret=%q uri=%q", gotSecret, gotURI)
+	}
+	if cfg.Token != "tok_setup" || cfg.Username != "alice" {
+		t.Errorf("cfg = %+v, want token tok_setup for alice", cfg)
 	}
 }
 

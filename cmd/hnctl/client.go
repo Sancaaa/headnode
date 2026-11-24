@@ -87,17 +87,44 @@ func (c *client) do(method, path string, body, into any) error {
 	return nil
 }
 
+type loginReply struct {
+	Username     string `json:"username"`
+	Token        string `json:"token"`
+	TOTPRequired bool   `json:"totp_required"`
+	TOTPSetup    bool   `json:"totp_setup"`
+	Secret       string `json:"secret"`
+	OTPAuthURI   string `json:"otpauth_uri"`
+}
+
 // login asks the server for a token. client:"cli" is what makes the server
 // reply with a bearer token instead of setting a cookie (protocol.md §1).
-func login(server, username, password string) (config, error) {
+// When the server asks for a one-time code (or first-time setup), promptOTP
+// receives the setup secret and otpauth:// URI (both empty when already set up).
+func login(server, username, password string, promptOTP func(secret, otpauthURI string) (string, error)) (config, error) {
 	c := &client{server: server, http: &http.Client{Timeout: 30 * time.Second}}
-	var reply struct {
-		Username string `json:"username"`
-		Token    string `json:"token"`
-	}
+	var reply loginReply
 	err := c.do("POST", "/api/login", map[string]string{"username": username, "password": password, "client": "cli"}, &reply)
 	if err != nil {
 		return config{}, err
+	}
+	if reply.TOTPSetup || reply.TOTPRequired {
+		if promptOTP == nil {
+			return config{}, errors.New("the server requires a one-time code")
+		}
+		code, err := promptOTP(reply.Secret, reply.OTPAuthURI)
+		if err != nil {
+			return config{}, err
+		}
+		reply = loginReply{}
+		err = c.do("POST", "/api/login", map[string]string{
+			"username": username,
+			"password": password,
+			"client":   "cli",
+			"code":     strings.TrimSpace(code),
+		}, &reply)
+		if err != nil {
+			return config{}, err
+		}
 	}
 	if reply.Token == "" {
 		return config{}, errors.New("the server did not send a token: is it an up-to-date headnode?")

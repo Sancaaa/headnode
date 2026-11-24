@@ -26,7 +26,7 @@ func TestAuditAPI(t *testing.T) {
 	for _, e := range all {
 		actions = append(actions, e.Action+":"+e.Detail)
 	}
-	want := []string{"group_create:group=C", "group_create:group=B", "group_create:group=A", "login:ip=127.0.0.1"}
+	want := []string{"group_create:group=C", "group_create:group=B", "group_create:group=A", "login:ip=127.0.0.1", "totp_enabled:ip=127.0.0.1"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("entries = %v\nwant      %v", actions, want)
 	}
@@ -49,7 +49,7 @@ func TestAuditAPI(t *testing.T) {
 		t.Fatalf("second page = %+v, want the two older entries", second)
 	}
 	var past []auditEntry
-	sendJSON(t, admin, srv, "GET", fmt.Sprintf("/api/audit?before=%d", all[3].ID), nil, &past)
+	sendJSON(t, admin, srv, "GET", fmt.Sprintf("/api/audit?before=%d", all[len(all)-1].ID), nil, &past)
 	if past == nil || len(past) != 0 {
 		t.Errorf("page past the oldest entry = %v, want an empty list", past)
 	}
